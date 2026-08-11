@@ -213,93 +213,104 @@ async function main() {
       );
     }
 
-    await prisma.$transaction(async (tx) => {
-      const publicName = `${def.firstName} ${def.lastName}`;
-      const speakerData: Prisma.SpeakerUncheckedCreateInput = {
-        firstName: def.firstName,
-        lastName: def.lastName,
-        publicName,
-        slug: def.slug,
-        countryId: country.id,
-        city: def.city,
-        profilePhotoUrl: `https://picsum.photos/seed/${def.slug}/600/600`,
-        coverPhotoUrl: `https://picsum.photos/seed/${def.slug}-cover/1200/400`,
-        professionalTitle: def.professionalTitle,
-        currentOrganization: def.currentOrganization,
-        shortBio: def.shortBio,
-        fullBio: def.fullBio,
-        feeTierPublic: def.feeTierPublic,
-        status: 'PUBLISHED',
-        isVisible: true,
-        isFeaturedHome: def.isFeaturedHome,
-        isTopRequested: def.isTopRequested,
-        showBudget: def.showBudget,
-        showLocation: true,
-        allowIndexing: true,
-        completionScore: 95,
-        publishedAt: new Date(),
-      };
+    await prisma.$transaction(
+      async (tx) => {
+        const publicName = `${def.firstName} ${def.lastName}`;
+        const speakerData: Prisma.SpeakerUncheckedCreateInput = {
+          firstName: def.firstName,
+          lastName: def.lastName,
+          publicName,
+          slug: def.slug,
+          countryId: country.id,
+          city: def.city,
+          profilePhotoUrl: `https://picsum.photos/seed/${def.slug}/600/600`,
+          coverPhotoUrl: `https://picsum.photos/seed/${def.slug}-cover/1200/400`,
+          professionalTitle: def.professionalTitle,
+          currentOrganization: def.currentOrganization,
+          shortBio: def.shortBio,
+          fullBio: def.fullBio,
+          feeTierPublic: def.feeTierPublic,
+          status: 'PUBLISHED',
+          isVisible: true,
+          isFeaturedHome: def.isFeaturedHome,
+          isTopRequested: def.isTopRequested,
+          showBudget: def.showBudget,
+          showLocation: true,
+          allowIndexing: true,
+          completionScore: 95,
+          publishedAt: new Date(),
+        };
 
-      const speaker = await tx.speaker.upsert({
-        where: { slug: def.slug },
-        update: speakerData,
-        create: speakerData,
-      });
+        const speaker = await tx.speaker.upsert({
+          where: { slug: def.slug },
+          update: speakerData,
+          create: speakerData,
+        });
 
-      // Relations many-to-many : remplacées en bloc à chaque exécution
-      // (delete puis recreate) — plus simple qu'un upsert relation par
-      // relation et tout aussi idempotent en sortie (voir en-tête).
-      await tx.speakerPillar.deleteMany({ where: { speakerId: speaker.id } });
-      await tx.speakerPillar.create({
-        data: {
-          speakerId: speaker.id,
-          pillarId: pillar.id,
-          isPrimary: true,
-          displayOrder: 0,
-        },
-      });
-
-      await tx.speakerFormat.deleteMany({ where: { speakerId: speaker.id } });
-      await tx.speakerFormat.createMany({
-        data: formats.map((format) => ({
-          speakerId: speaker.id,
-          formatId: format.id,
-        })),
-      });
-
-      await tx.speakerLanguage.deleteMany({ where: { speakerId: speaker.id } });
-      await tx.speakerLanguage.createMany({
-        data: def.languages.map((lang) => {
-          const language = languages.find((l) => l.code === lang.code)!;
-          return {
+        // Relations many-to-many : remplacées en bloc à chaque exécution
+        // (delete puis recreate) — plus simple qu'un upsert relation par
+        // relation et tout aussi idempotent en sortie (voir en-tête).
+        await tx.speakerPillar.deleteMany({ where: { speakerId: speaker.id } });
+        await tx.speakerPillar.create({
+          data: {
             speakerId: speaker.id,
-            languageId: language.id,
-            proficiency: lang.proficiency,
-            canPresent: true,
-            canQa: true,
-            canModerate: lang.proficiency === 'NATIVE',
-          };
-        }),
-      });
+            pillarId: pillar.id,
+            isPrimary: true,
+            displayOrder: 0,
+          },
+        });
 
-      await tx.signatureEngagement.deleteMany({
-        where: { speakerId: speaker.id },
-      });
-      await tx.signatureEngagement.create({
-        data: {
-          speakerId: speaker.id,
-          eventName: def.engagement.eventName,
-          organization: def.engagement.organization,
-          dateLabel: def.engagement.dateLabel,
-          role: def.engagement.role,
-          topic: def.engagement.topic,
-          description: def.engagement.description,
-          displayOrder: 0,
-        },
-      });
+        await tx.speakerFormat.deleteMany({ where: { speakerId: speaker.id } });
+        await tx.speakerFormat.createMany({
+          data: formats.map((format) => ({
+            speakerId: speaker.id,
+            formatId: format.id,
+          })),
+        });
 
-      console.log(`[seed:demo-speakers] OK — ${publicName} (${def.slug})`);
-    });
+        await tx.speakerLanguage.deleteMany({
+          where: { speakerId: speaker.id },
+        });
+        await tx.speakerLanguage.createMany({
+          data: def.languages.map((lang) => {
+            const language = languages.find((l) => l.code === lang.code)!;
+            return {
+              speakerId: speaker.id,
+              languageId: language.id,
+              proficiency: lang.proficiency,
+              canPresent: true,
+              canQa: true,
+              canModerate: lang.proficiency === 'NATIVE',
+            };
+          }),
+        });
+
+        await tx.signatureEngagement.deleteMany({
+          where: { speakerId: speaker.id },
+        });
+        await tx.signatureEngagement.create({
+          data: {
+            speakerId: speaker.id,
+            eventName: def.engagement.eventName,
+            organization: def.engagement.organization,
+            dateLabel: def.engagement.dateLabel,
+            role: def.engagement.role,
+            topic: def.engagement.topic,
+            description: def.engagement.description,
+            displayOrder: 0,
+          },
+        });
+
+        console.log(`[seed:demo-speakers] OK — ${publicName} (${def.slug})`);
+      },
+      {
+        // Le timeout par défaut (5000 ms) est trop court une fois qu'on
+        // parle à la base de PRODUCTION distante (latence réseau bien plus
+        // élevée qu'en local) — chaque itération fait plusieurs
+        // aller-retours (upsert + 4 delete/create de relations).
+        timeout: 15000,
+      },
+    );
   }
 
   await prisma.$disconnect();

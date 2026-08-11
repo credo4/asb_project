@@ -1,4 +1,4 @@
-import { Controller, Get, Param } from '@nestjs/common';
+import { Controller, Get, Param, Query } from '@nestjs/common';
 import { Throttle } from '@nestjs/throttler';
 import {
   ApiOkResponse,
@@ -8,8 +8,9 @@ import {
 } from '@nestjs/swagger';
 import { Public } from '../../../common/decorators/public.decorator';
 import { PublicCuratedListsService } from './public-curated-lists.service';
-import { PublicCuratedListListItemDto } from '../dto/public-curated-list-list-item.dto';
+import { PublicCuratedListListResponseDto } from '../dto/public-curated-list-list-item.dto';
 import { PublicCuratedListDetailDto } from '../dto/public-curated-list-detail.dto';
+import { QueryPublicCuratedListsDto } from '../dto/query-public-curated-lists.dto';
 
 @ApiTags('Public — Curated lists')
 @Controller('public/curated-lists')
@@ -21,10 +22,14 @@ export class PublicCuratedListsController {
   @Get()
   @ApiOperation({
     summary: 'Listes éditoriales PUBLIÉES, triées par displayOrder',
+    description:
+      'Réponse paginée `{ data, meta }` — même contrat que GET /public/speakers ' +
+      "(consolidation avant 3d : uniformisation suite à retour d'intégration " +
+      "front, un tableau nu n'était pas cohérent avec le reste de l'API publique).",
   })
-  @ApiOkResponse({ type: [PublicCuratedListListItemDto] })
-  findAll() {
-    return this.service.findAll();
+  @ApiOkResponse({ type: PublicCuratedListListResponseDto })
+  findAll(@Query() query: QueryPublicCuratedListsDto) {
+    return this.service.findAll(query);
   }
 
   @Get(':slug')

@@ -23,6 +23,10 @@ interface PublicListItemBody {
   slug: string;
   title: string;
 }
+interface PublicListResponseBody {
+  data: PublicListItemBody[];
+  meta: { total: number; page: number; perPage: number };
+}
 interface PublicListDetailBody {
   slug: string;
   title: string;
@@ -286,9 +290,28 @@ describe('Curated lists API (e2e)', () => {
       const res = await request(app.getHttpServer())
         .get('/public/curated-lists')
         .expect(200);
-      const titles = (res.body as PublicListItemBody[]).map((l) => l.title);
+      const body = res.body as PublicListResponseBody;
+      const titles = body.data.map((l) => l.title);
       expect(titles).toContain(publishedList.title);
       expect(titles).not.toContain(draftList.title);
+    });
+
+    it('GET /public/curated-lists — réponse paginée { data, meta }, même contrat que /public/speakers', async () => {
+      const list = await createList(`Pagination Shape Check ${suffix}`);
+      await request(app.getHttpServer())
+        .patch(`/admin/curated-lists/${list.id}/status`)
+        .set('Authorization', `Bearer ${adminToken}`)
+        .send({ status: 'PUBLISHED' })
+        .expect(200);
+
+      const res = await request(app.getHttpServer())
+        .get('/public/curated-lists?page=1&perPage=5')
+        .expect(200);
+      const body = res.body as PublicListResponseBody;
+      expect(Array.isArray(body.data)).toBe(true);
+      expect(body.meta.page).toBe(1);
+      expect(body.meta.perPage).toBe(5);
+      expect(body.meta.total).toBeGreaterThanOrEqual(1);
     });
 
     it('GET /public/curated-lists/:slug renvoie 404 pour une liste DRAFT (jamais 403)', async () => {

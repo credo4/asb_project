@@ -1,11 +1,16 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { CuratedListStatus } from '@prisma/client';
 import { PrismaService } from '../../../prisma/prisma.service';
-import { publicSpeakerWhere } from '../public-speaker.constants';
+import {
+  PUBLIC_DEFAULT_PER_PAGE,
+  PUBLIC_MAX_PER_PAGE,
+  publicSpeakerWhere,
+} from '../public-speaker.constants';
 import { PUBLIC_SPEAKER_LIST_SELECT } from '../public-speaker.select';
 import { toPublicListItemDto } from '../mappers/public-speaker.mapper';
-import { PublicCuratedListListItemDto } from '../dto/public-curated-list-list-item.dto';
+import { PublicCuratedListListResponseDto } from '../dto/public-curated-list-list-item.dto';
 import { PublicCuratedListDetailDto } from '../dto/public-curated-list-detail.dto';
+import { QueryPublicCuratedListsDto } from '../dto/query-public-curated-lists.dto';
 
 const LIST_ITEM_SELECT = {
   slug: true,
@@ -22,12 +27,28 @@ export class PublicCuratedListsService {
   // curated-lists, requêtes propres avec `select` explicites.
   constructor(private readonly prisma: PrismaService) {}
 
-  async findAll(): Promise<PublicCuratedListListItemDto[]> {
-    return this.prisma.curatedList.findMany({
-      where: { status: CuratedListStatus.PUBLISHED, deletedAt: null },
-      orderBy: { displayOrder: 'asc' },
-      select: LIST_ITEM_SELECT,
-    });
+  async findAll(
+    query: QueryPublicCuratedListsDto,
+  ): Promise<PublicCuratedListListResponseDto> {
+    const page = query.page ?? 1;
+    const perPage = Math.min(
+      query.perPage ?? PUBLIC_DEFAULT_PER_PAGE,
+      PUBLIC_MAX_PER_PAGE,
+    );
+    const where = { status: CuratedListStatus.PUBLISHED, deletedAt: null };
+
+    const [total, rows] = await this.prisma.$transaction([
+      this.prisma.curatedList.count({ where }),
+      this.prisma.curatedList.findMany({
+        where,
+        orderBy: { displayOrder: 'asc' },
+        skip: (page - 1) * perPage,
+        take: perPage,
+        select: LIST_ITEM_SELECT,
+      }),
+    ]);
+
+    return { data: rows, meta: { total, page, perPage } };
   }
 
   // §B4 — RÈGLE CRITIQUE : le filtre "speaker publié et visible" est dans
