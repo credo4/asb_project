@@ -123,6 +123,48 @@ enum OneToOnePurpose {
   OTHER
 }
 
+// Cycle de vie d'un speaker dans la sélection d'une demande (Phase 3d, §2).
+// Même pattern de matrice de transitions que BookingStatus/ApplicationStatus
+// (voir booking-request-speaker-status-transitions.util.ts) — hypothèse
+// raisonnable de workflow : shortlist -> sollicitation -> réponse ->
+// proposition au client -> décision, avec WITHDRAWN comme sortie possible
+// depuis presque tous les états actifs.
+enum BookingRequestSpeakerStatus {
+  SHORTLISTED
+  AVAILABILITY_REQUESTED
+  SPEAKER_AVAILABLE
+  SPEAKER_AVAILABLE_WITH_CONDITIONS
+  SPEAKER_UNAVAILABLE
+  SPEAKER_NEEDS_INFO
+  PROPOSED_TO_CLIENT
+  CLIENT_DECLINED
+  SELECTED
+  WITHDRAWN
+}
+
+// Cycle de vie d'UNE sollicitation de disponibilité (Phase 3d, §3.2).
+// Volontairement PAS de fichier de matrice séparé (contrairement à
+// BookingStatus/ApplicationStatus/BookingRequestSpeakerStatus) : un seul
+// état non-terminal (SENT), les trois autres sont tous terminaux — la
+// "matrice" tient en une ligne, voir AvailabilityRequestsService.
+enum AvailabilityRequestStatus {
+  SENT
+  RESPONDED
+  EXPIRED
+  CANCELLED
+}
+
+// Réponse du speaker à une sollicitation (§18 du cahier des charges).
+// ⚠️ Aucune de ces valeurs ne constitue un engagement de mission (§3.5) —
+// même AVAILABLE_INTERESTED reste une expression d'intérêt, jamais une
+// confirmation. La création de mission (Phase 3e) est hors périmètre ici.
+enum AvailabilityResponseStatus {
+  AVAILABLE_INTERESTED
+  AVAILABLE_WITH_CONDITIONS
+  UNAVAILABLE
+  NEEDS_INFO
+}
+
 // Cycle de vie d'une candidature speaker (cf. §5, Phase 3 étape 3c).
 // Renommage Phase 3c : INTERVIEWED -> INTERVIEW_DONE (voir migration
 // add_roster_application_conversion — sûr sans backfill, cf. vérification
@@ -261,6 +303,8 @@ model User {
   uploadedAttachments          BookingRequestAttachment[]    @relation("BookingRequestAttachmentUploader")
   assignedReminders            Reminder[]                    @relation("ReminderAssignee")
   createdReminders             Reminder[]                    @relation("ReminderCreator")
+  addedBookingRequestSpeakers  BookingRequestSpeaker[]       @relation("BookingRequestSpeakerAddedBy")
+  sentAvailabilityRequests     AvailabilityRequest[]         @relation("AvailabilityRequestSender")
   activityLogs                 ActivityLog[]
   emailVerificationTokens      EmailVerificationToken[]
   passwordResetTokens          PasswordResetToken[]
@@ -400,6 +444,7 @@ model Country {
   travelPreferenceCountries SpeakerTravelPreferenceCountry[]
   organizations             Organization[]
   contacts                  Contact[]
+  availabilityRequests      AvailabilityRequest[]
 
   @@map("countries")
 }
@@ -483,18 +528,21 @@ model Speaker {
   // relation "mediaAssets" séparée.
   media       SpeakerMedia[]        @relation("SpeakerMedia")
 
-  bookingRequests        BookingRequest[]            @relation("RequestedSpeaker")
-  sourceApplication      RosterApplication?          @relation("ApplicationConversion")
-  revisions              SpeakerRevision[]           @relation("SpeakerRevisions")
-  documents              SpeakerDocument[]           @relation("SpeakerDocuments")
-  availabilityPeriods    SpeakerAvailabilityPeriod[] @relation("SpeakerAvailabilityPeriods")
-  travelPreference       SpeakerTravelPreference?    @relation("SpeakerTravelPreference")
-  analyticsEvents        AnalyticsEvent[]            @relation("SpeakerAnalyticsEvents")
+  bookingRequests           BookingRequest[]            @relation("RequestedSpeaker")
+  sourceApplication         RosterApplication?          @relation("ApplicationConversion")
+  revisions                 SpeakerRevision[]           @relation("SpeakerRevisions")
+  documents                 SpeakerDocument[]           @relation("SpeakerDocuments")
+  availabilityPeriods       SpeakerAvailabilityPeriod[] @relation("SpeakerAvailabilityPeriods")
+  travelPreference          SpeakerTravelPreference?    @relation("SpeakerTravelPreference")
+  analyticsEvents           AnalyticsEvent[]            @relation("SpeakerAnalyticsEvents")
   // Listes éditoriales (consolidation, Partie B) — DISTINCT du drapeau
   // isTopRequested ci-dessus (voir CLAUDE.md §6) : appartenance à une ou
   // plusieurs collections thématiques, gérée par admin, jamais un doublon de
   // "Top Requested".
-  curatedListMemberships CuratedListSpeaker[]        @relation("CuratedListMemberships")
+  curatedListMemberships    CuratedListSpeaker[]        @relation("CuratedListMemberships")
+  // Matching & disponibilité (Phase 3d) — voir CLAUDE.md.
+  bookingRequestCandidacies BookingRequestSpeaker[]     @relation("BookingRequestSpeakerCandidate")
+  availabilityRequests      AvailabilityRequest[]       @relation("SpeakerAvailabilityRequests")
 
   @@index([status])
   @@index([isTopRequested])
@@ -913,16 +961,19 @@ model BookingRequest {
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
 
-  requestedSpeaker   Speaker?                   @relation("RequestedSpeaker", fields: [requestedSpeakerId], references: [id], onDelete: SetNull)
-  assignedAdmin      User?                      @relation("BookingAssignee", fields: [assignedAdminId], references: [id], onDelete: SetNull)
+  requestedSpeaker     Speaker?                   @relation("RequestedSpeaker", fields: [requestedSpeakerId], references: [id], onDelete: SetNull)
+  assignedAdmin        User?                      @relation("BookingAssignee", fields: [assignedAdminId], references: [id], onDelete: SetNull)
   // Noms de relation "linked..." (pas "contact"/"organization" tout court) :
   // `organization` est déjà pris par la colonne texte libre d'intake
   // ci-dessus — pas de collision de nom possible côté client Prisma généré.
-  linkedContact      Contact?                   @relation("BookingContact", fields: [contactId], references: [id], onDelete: SetNull)
-  linkedOrganization Organization?              @relation("BookingOrganization", fields: [organizationId], references: [id], onDelete: SetNull)
-  notes              BookingRequestNote[]
-  attachments        BookingRequestAttachment[]
-  reminders          Reminder[]
+  linkedContact        Contact?                   @relation("BookingContact", fields: [contactId], references: [id], onDelete: SetNull)
+  linkedOrganization   Organization?              @relation("BookingOrganization", fields: [organizationId], references: [id], onDelete: SetNull)
+  notes                BookingRequestNote[]
+  attachments          BookingRequestAttachment[]
+  reminders            Reminder[]
+  // Matching & disponibilité (Phase 3d) — voir CLAUDE.md.
+  speakerCandidates    BookingRequestSpeaker[]
+  availabilityRequests AvailabilityRequest[]
 
   @@index([serviceType])
   @@index([status])
@@ -1381,4 +1432,124 @@ model AnalyticsEvent {
   @@index([curatedListId])
   @@index([createdAt])
   @@map("analytics_events")
+}
+
+// =============================================================================
+// MATCHING & DISPONIBILITÉ (Phase 3, étape 3d — cf. cahier des charges §7/§18)
+// -----------------------------------------------------------------------------
+// Le "matching" lui-même (GET .../matching-candidates) ne persiste RIEN :
+// recherche assistée, pas d'algorithme, rien à stocker pour la recherche en
+// tant que telle. Ce qui EST persisté ici, ce sont les deux artefacts
+// concrets qui en résultent : la sélection de candidats retenus par
+// l'équipe (BookingRequestSpeaker), et les sollicitations de disponibilité
+// effectivement envoyées à un speaker (AvailabilityRequest).
+// =============================================================================
+
+// Sélection de speakers candidats pour une demande client. Unicité sur
+// (requestId, speakerId) : un speaker ne peut apparaître qu'UNE fois dans la
+// sélection d'une demande donnée — un retrait explicite (WITHDRAWN) puis un
+// nouvel ajout réutilisent la même ligne plutôt que d'en créer une seconde
+// (voir BookingRequestSpeakersService).
+//
+// PAS de table `proposals` séparée (§2 du prompt) : la génération de
+// propositions PDF est explicitement v2 (cahier des charges §31) —
+// `proposedToClientAt` suffit à ce stade pour tracer QUAND un speaker a été
+// inclus dans ce qui a été envoyé au client, sans modéliser le document
+// lui-même.
+model BookingRequestSpeaker {
+  id                 Int                         @id @default(autoincrement())
+  requestId          Int                         @map("request_id")
+  speakerId          Int                         @map("speaker_id")
+  addedById          Int?                        @map("added_by_id")
+  addedAt            DateTime                    @default(now()) @map("added_at")
+  status             BookingRequestSpeakerStatus @default(SHORTLISTED)
+  displayOrder       Int                         @default(0) @map("display_order")
+  internalNotes      String?                     @map("internal_notes") @db.Text
+  proposedToClientAt DateTime?                   @map("proposed_to_client_at")
+  deletedAt          DateTime?                   @map("deleted_at")
+
+  request BookingRequest @relation(fields: [requestId], references: [id], onDelete: Cascade)
+  speaker Speaker        @relation("BookingRequestSpeakerCandidate", fields: [speakerId], references: [id], onDelete: Cascade)
+  addedBy User?          @relation("BookingRequestSpeakerAddedBy", fields: [addedById], references: [id], onDelete: SetNull)
+
+  @@unique([requestId, speakerId])
+  @@index([requestId])
+  @@index([speakerId])
+  @@index([status])
+  @@map("booking_request_speakers")
+}
+
+// Une sollicitation de disponibilité envoyée à UN speaker pour UNE demande.
+//
+// ⚠️ FRONTIÈRE ADMIN <-> SPEAKER (§3.1, voir aussi CLAUDE.md) : les champs
+// ci-dessous du "briefing" sont une COPIE composée par l'équipe au moment de
+// l'ENVOI, en colonnes propres — jamais une jointure vers `booking_requests`.
+// Le speaker ne voit et ne verra JAMAIS l'identité du client, le budget
+// client, les notes internes, la commission, ni les autres speakers
+// sollicités : aucun de ces champs n'existe sur ce modèle. Voir
+// AvailabilityRequestBriefingDto (dto de sortie dédié, testé par
+// sérialisation complète) pour la mise en application côté API.
+model AvailabilityRequest {
+  id               Int                       @id @default(autoincrement())
+  bookingRequestId Int                       @map("booking_request_id")
+  speakerId        Int                       @map("speaker_id")
+  sentById         Int?                      @map("sent_by_id")
+  sentAt           DateTime                  @default(now()) @map("sent_at")
+  respondDueAt     DateTime                  @map("respond_due_at")
+  status           AvailabilityRequestStatus @default(SENT)
+
+  // --- Briefing (copie en colonnes propres, voir commentaire ci-dessus) ---
+  eventType           String    @map("event_type") @db.VarChar(120)
+  eventDate           DateTime  @map("event_date")
+  eventEndDate        DateTime? @map("event_end_date")
+  locationCountryId   Int?      @map("location_country_id")
+  isVirtual           Boolean   @default(false) @map("is_virtual")
+  durationMinutes     Int?      @map("duration_minutes")
+  topic               String    @db.Text
+  audienceDescription String?   @map("audience_description") @db.Text
+  audienceSize        String?   @map("audience_size") @db.VarChar(60)
+  language            String?   @db.VarChar(80)
+  // La rémunération PROPOSÉE POUR LUI (§3.1) — légitime, c'est la sienne.
+  // Distincte de `estimatedBudget` (texte libre client) sur BookingRequest,
+  // jamais dérivée de lui automatiquement : l'équipe la saisit explicitement
+  // à l'envoi, exactement le montant qu'elle veut proposer à CE speaker.
+  proposedFeeAmount   Decimal?  @map("proposed_fee_amount") @db.Decimal(12, 2)
+  proposedFeeCurrency String?   @map("proposed_fee_currency") @db.VarChar(3)
+  travelConditions    String?   @map("travel_conditions") @db.Text
+  additionalNotes     String?   @map("additional_notes") @db.Text
+
+  // --- Réponse du speaker (§18) ---
+  // ⚠️ Ne constitue JAMAIS une confirmation de mission (§3.5) — voir
+  // AvailabilityResponseStatus. La mission (Phase 3e) est hors périmètre ici.
+  responseStatus        AvailabilityResponseStatus? @map("response_status")
+  respondedAt           DateTime?                   @map("responded_at")
+  // Commentaire PRIVÉ à l'équipe — jamais transmis au client, jamais dans
+  // aucune projection destinée au client (voir §3.1 et les tests associés).
+  speakerPrivateComment String?                     @map("speaker_private_comment") @db.Text
+
+  // §3.3 — pas deux sollicitations ACTIVES en même temps pour le même
+  // (bookingRequestId, speakerId). MySQL ne supporte pas les index uniques
+  // partiels (`WHERE status = 'SENT'`) : émulé via `activeGuard`, même
+  // pattern que SpeakerRevision.activeGuard (Phase 2a) — NULL autorise
+  // n'importe quel nombre de lignes (MySQL traite NULL comme distinct de
+  // NULL), mais l'index UNIQUE interdit deux lignes avec la MÊME valeur
+  // non-NULL. Encode le COUPLE (bookingRequestId, speakerId) sous forme de
+  // chaîne "<bookingRequestId>-<speakerId>" — un seul entier ne suffirait
+  // pas à porter une contrainte composite ici, MySQL n'indexant pas
+  // nativement une paire de colonnes nullable de la même façon qu'une
+  // colonne unique classique pour ce cas d'usage. Mis à NULL dès que le
+  // statut devient terminal (RESPONDED/EXPIRED/CANCELLED) — voir
+  // AvailabilityRequestsService, jamais un `findFirst` puis `create`.
+  activeGuard String? @unique @map("active_guard") @db.VarChar(40)
+
+  bookingRequest  BookingRequest @relation(fields: [bookingRequestId], references: [id], onDelete: Cascade)
+  speaker         Speaker        @relation("SpeakerAvailabilityRequests", fields: [speakerId], references: [id], onDelete: Cascade)
+  sentBy          User?          @relation("AvailabilityRequestSender", fields: [sentById], references: [id], onDelete: SetNull)
+  locationCountry Country?       @relation(fields: [locationCountryId], references: [id], onDelete: SetNull)
+
+  @@index([bookingRequestId])
+  @@index([speakerId])
+  @@index([status])
+  @@index([respondDueAt])
+  @@map("availability_requests")
 }

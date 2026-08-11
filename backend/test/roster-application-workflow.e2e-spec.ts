@@ -86,10 +86,11 @@ function fullEvaluationPayload(
 
 // Couvre le prompt Phase 3, étape 3c (§6) : machine à états (9 statuts),
 // CONVERTED inatteignable manuellement, idempotence de la conversion portée
-// par la base, refus explicite en cas d'email déjà utilisé, rollback complet
-// sur échec d'envoi pendant la conversion, cycle de vie du token
-// d'invitation, évaluations (une par évaluateur, strictement internes), et
-// le parcours complet Phases 1+2+3.
+// par la base, refus explicite en cas d'email déjà utilisé, conversion qui
+// RÉUSSIT même si l'envoi d'email échoue (§4.2 — aucun envoi d'email dans
+// une transaction, la conversion elle-même n'est jamais annulée par un
+// échec SMTP), cycle de vie du token d'invitation, évaluations (une par
+// évaluateur, strictement internes), et le parcours complet Phases 1+2+3.
 describe('Roster application workflow (Phase 3c) API (e2e)', () => {
   let app: INestApplication<App>;
   let prisma: PrismaService;
@@ -432,34 +433,60 @@ describe('Roster application workflow (Phase 3c) API (e2e)', () => {
       ).not.toHaveBeenCalled();
     });
 
-    it("échec simulé de l'envoi d'email pendant la conversion : la transaction est annulée, aucun compte ni fiche ne subsiste", async () => {
-      mailService.sendRosterApplicationInvitation.mockRejectedValueOnce(
-        new Error('SMTP down'),
-      );
+    it(
+      "échec simulé de l'envoi d'email pendant la conversion : la " +
+        'conversion RÉUSSIT quand même (compte + fiche + token existent), ' +
+        "et l'échec est enregistré en FAILED dans email_deliveries " +
+        "(§4.2 — aucun envoi d'email dans une transaction)",
+      async () => {
+        mailService.sendRosterApplicationInvitation.mockRejectedValueOnce(
+          new Error('SMTP down'),
+        );
 
-      const application = await createApplication({
-        status: ApplicationStatus.APPROVED,
-      });
-
-      await request(app.getHttpServer())
-        .post(`/admin/roster-applications/${application.id}/convert`)
-        .set('Authorization', `Bearer ${adminToken}`)
-        .expect((res) => {
-          expect(res.status).toBeGreaterThanOrEqual(500);
+        const application = await createApplication({
+          status: ApplicationStatus.APPROVED,
         });
 
-      const row = await prisma.rosterApplication.findUniqueOrThrow({
-        where: { id: application.id },
-      });
-      expect(row.status).toBe('APPROVED');
-      expect(row.convertedUserId).toBeNull();
-      expect(row.convertedSpeakerId).toBeNull();
+        const res = await request(app.getHttpServer())
+          .post(`/admin/roster-applications/${application.id}/convert`)
+          .set('Authorization', `Bearer ${adminToken}`)
+          .expect(201);
+        const body = res.body as ConversionResultBody;
+        expect(body.invitationSent).toBe(false);
+        createdUserIds.push(body.user.id);
+        createdSpeakerIds.push(body.speaker.id);
 
-      const userCount = await prisma.user.count({
-        where: { email: application.workEmail },
-      });
-      expect(userCount).toBe(0);
-    });
+        // La conversion elle-même a bien eu lieu : compte, fiche et
+        // rattachement présents en base — un échec SMTP ne l'annule plus.
+        const row = await prisma.rosterApplication.findUniqueOrThrow({
+          where: { id: application.id },
+        });
+        expect(row.status).toBe('CONVERTED');
+        expect(row.convertedUserId).toBe(body.user.id);
+        expect(row.convertedSpeakerId).toBe(body.speaker.id);
+
+        const userCount = await prisma.user.count({
+          where: { email: application.workEmail },
+        });
+        expect(userCount).toBe(1);
+
+        // Le token d'invitation a bien été persisté (généré DANS la
+        // transaction, indépendant de l'échec de l'envoi qui, lui, a lieu
+        // après le commit) — l'admin peut renvoyer l'invitation.
+        const tokenCount = await prisma.invitationToken.count({
+          where: { userId: body.user.id },
+        });
+        expect(tokenCount).toBe(1);
+
+        // MailService est intégralement mocké dans ce fichier (voir
+        // beforeAll) : l'écriture réelle dans email_deliveries (via
+        // MailService#sendAndLog) n'a donc PAS lieu ici — le mock
+        // court-circuite toute l'implémentation. Cette partie du
+        // comportement (échec RÉEL loggé en FAILED) est couverte par un
+        // test dédié dans email-deliveries.e2e-spec.ts, qui n'utilise
+        // aucun mock et déclenche un vrai échec SMTP.
+      },
+    );
 
     it("refuse la conversion si la candidature n'est pas APPROVED", async () => {
       const application = await createApplication({

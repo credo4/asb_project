@@ -3,7 +3,7 @@ import { INestApplication } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import request from 'supertest';
 import { App } from 'supertest/types';
-import { Role, ServiceType, User } from '@prisma/client';
+import { ApplicationStatus, Role, ServiceType, User } from '@prisma/client';
 import { AppModule } from '../src/app.module';
 import { PrismaService } from '../src/prisma/prisma.service';
 import { configureApp } from '../src/app.config';
@@ -22,6 +22,11 @@ interface BookingRequestDetailBody {
 interface AckResponseBody {
   reference: string;
 }
+interface ConversionResultBody {
+  user: { id: number; email: string };
+  speaker: { id: number };
+  invitationSent: boolean;
+}
 
 // Couvre le prompt "consolidation avant la suite de la Phase 3", Partie E :
 // journal d'envoi des emails. Les identifiants SMTP de dev (.env,
@@ -37,6 +42,8 @@ describe('Journal des emails — email_deliveries (e2e)', () => {
   const createdUserIds: number[] = [];
   const createdDeliveryIds: number[] = [];
   const createdBookingReferences: string[] = [];
+  const createdApplicationIds: number[] = [];
+  const createdSpeakerIds: number[] = [];
 
   let adminToken: string;
   let speakerToken: string;
@@ -88,6 +95,14 @@ describe('Journal des emails — email_deliveries (e2e)', () => {
     });
     await prisma.bookingRequest.deleteMany({
       where: { reference: { in: createdBookingReferences } },
+    });
+    await prisma.rosterApplication.deleteMany({
+      where: { id: { in: createdApplicationIds } },
+    });
+    // Speaker.userId est ON DELETE SET NULL (pas Cascade) — supprimé
+    // explicitement AVANT le user, sinon il survivrait orphelin.
+    await prisma.speaker.deleteMany({
+      where: { id: { in: createdSpeakerIds } },
     });
     await prisma.user.deleteMany({ where: { id: { in: createdUserIds } } });
     await app.close();
@@ -208,6 +223,131 @@ describe('Journal des emails — email_deliveries (e2e)', () => {
           where: {
             relatedEntityType: 'BookingRequest',
             relatedEntityId: bookingRequest.id,
+          },
+        });
+        expect(rows.length).toBeGreaterThan(0);
+        expect(rows.every((r) => r.status === 'FAILED')).toBe(true);
+        expect(rows.every((r) => r.errorMessage)).toBeTruthy();
+      },
+      15000,
+    );
+
+    it(
+      'conversion de candidature (§4.2) : la conversion RÉUSSIT (compte + ' +
+        "fiche + token créés) même si l'envoi RÉEL de l'invitation échoue " +
+        '— aucun envoi ne se trouve DANS la transaction Prisma',
+      async () => {
+        const application = await prisma.rosterApplication.create({
+          data: {
+            reference: `APP-E2E-EMAILDELIVERY-${suffix}`,
+            fullName: '[E2E] Email Delivery Candidate',
+            organization: '[E2E] Email Delivery Org',
+            workEmail: `e2e-emaildelivery-conversion-${suffix}@example.com`,
+            gdprConsent: true,
+            status: ApplicationStatus.APPROVED,
+          },
+        });
+        createdApplicationIds.push(application.id);
+
+        const res = await request(app.getHttpServer())
+          .post(`/admin/roster-applications/${application.id}/convert`)
+          .set('Authorization', `Bearer ${adminToken}`)
+          .expect(201);
+        const body = res.body as ConversionResultBody;
+        createdUserIds.push(body.user.id);
+        createdSpeakerIds.push(body.speaker.id);
+
+        // La négociation SMTP réelle (voir en-tête de fichier) a le temps
+        // de se terminer avant la fin de la requête HTTP elle-même :
+        // l'envoi se fait maintenant APRÈS le commit, dans le corps de la
+        // méthode, avant que la réponse ne parte — pas besoin d'attente
+        // supplémentaire ici (contrairement au test booking-requests
+        // ci-dessus, qui vérifie un envoi véritablement fire-and-forget).
+        expect(body.invitationSent).toBe(false);
+
+        const converted = await prisma.rosterApplication.findUniqueOrThrow({
+          where: { id: application.id },
+        });
+        expect(converted.status).toBe('CONVERTED');
+        expect(converted.convertedUserId).toBe(body.user.id);
+        expect(converted.convertedSpeakerId).toBe(body.speaker.id);
+
+        const tokenCount = await prisma.invitationToken.count({
+          where: { userId: body.user.id },
+        });
+        expect(tokenCount).toBe(1);
+
+        const rows = await prisma.emailDelivery.findMany({
+          where: {
+            relatedEntityType: 'RosterApplication',
+            relatedEntityId: application.id,
+          },
+        });
+        expect(rows.length).toBeGreaterThan(0);
+        expect(rows.every((r) => r.status === 'FAILED')).toBe(true);
+        expect(rows.every((r) => r.errorMessage)).toBeTruthy();
+      },
+      15000,
+    );
+
+    it(
+      'envoi de sollicitation de disponibilité (Phase 3d, §5) : réussit ' +
+        "quand même si l'envoi RÉEL échoue, journalisé FAILED",
+      async () => {
+        const speakerUser = await prisma.user.create({
+          data: {
+            email: `e2e-emaildelivery-availspeaker-${suffix}@example.com`,
+            role: Role.SPEAKER,
+            status: 'ACTIVE',
+          },
+        });
+        createdUserIds.push(speakerUser.id);
+        const speaker = await prisma.speaker.create({
+          data: {
+            userId: speakerUser.id,
+            firstName: 'Avail',
+            lastName: 'Speaker',
+            slug: `e2e-emaildelivery-availspeaker-${suffix}`,
+            status: 'PUBLISHED',
+            isVisible: true,
+            publishedAt: new Date(),
+          },
+        });
+        createdSpeakerIds.push(speaker.id);
+
+        const bookingRequest = await prisma.bookingRequest.create({
+          data: {
+            reference: `ASB-EMAILDELIV-3D-${suffix}`,
+            serviceType: ServiceType.CONFERENCE,
+            fullName: '[E2E] Email Delivery Client',
+            workEmail: `e2e-emaildelivery-availclient-${suffix}@example.com`,
+          },
+        });
+        createdBookingReferences.push(bookingRequest.reference);
+
+        await request(app.getHttpServer())
+          .post(`/admin/booking-requests/${bookingRequest.id}/speakers`)
+          .set('Authorization', `Bearer ${adminToken}`)
+          .send({ speakerId: speaker.id })
+          .expect(201);
+
+        const res = await request(app.getHttpServer())
+          .post('/admin/availability-requests')
+          .set('Authorization', `Bearer ${adminToken}`)
+          .send({
+            bookingRequestId: bookingRequest.id,
+            speakerId: speaker.id,
+            eventType: 'Conference',
+            eventDate: '2027-09-15',
+            topic: 'Topic',
+          })
+          .expect(201);
+        const availabilityRequestId = (res.body as { id: number }).id;
+
+        const rows = await prisma.emailDelivery.findMany({
+          where: {
+            relatedEntityType: 'AvailabilityRequest',
+            relatedEntityId: availabilityRequestId,
           },
         });
         expect(rows.length).toBeGreaterThan(0);

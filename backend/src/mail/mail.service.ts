@@ -21,7 +21,10 @@ type TemplateName =
   | 'speaker-revision-team-notification'
   | 'speaker-revision-approved'
   | 'speaker-revision-changes-requested'
-  | 'speaker-revision-rejected';
+  | 'speaker-revision-rejected'
+  | 'availability-request-notification'
+  | 'availability-response-notification'
+  | 'availability-request-expired';
 
 // `relatedEntityId` est optionnel PARTOUT (voir sendAndLog) : certains
 // appels n'ont simplement rien à lier (ex. vérification d'email, avant
@@ -118,6 +121,25 @@ export interface SpeakerRevisionRejectedInput extends RelatableInput {
   to: string;
   speakerName: string;
   reviewerComment: string;
+}
+
+// Phase 3d — matching et disponibilité (§5).
+export interface AvailabilityRequestNotificationInput extends RelatableInput {
+  to: string;
+  eventType: string;
+  eventDate: string;
+  opportunityUrl: string;
+}
+
+export interface AvailabilityResponseNotificationInput extends RelatableInput {
+  to: string;
+  responseStatus: string;
+  backOfficeUrl: string;
+}
+
+export interface AvailabilityRequestExpiredInput extends RelatableInput {
+  to: string;
+  backOfficeUrl: string;
 }
 
 @Injectable()
@@ -459,6 +481,73 @@ export class MailService {
       relatedEntityId: input.relatedEntityId,
     });
     this.logger.log(`Email de refus envoyé à ${input.to}`);
+  }
+
+  // Phase 3d, §5 — au speaker, à l'envoi d'une sollicitation. `relatedEntityType`
+  // = 'AvailabilityRequest', PAS 'BookingRequest' : le journal doit pouvoir
+  // distinguer une sollicitation d'une demande, même liées entre elles.
+  async sendAvailabilityRequestNotification(
+    input: AvailabilityRequestNotificationInput,
+  ): Promise<void> {
+    const html = this.render('availability-request-notification', {
+      eventType: input.eventType,
+      eventDate: input.eventDate,
+      opportunityUrl: input.opportunityUrl,
+    });
+    const subject = 'Nouvelle opportunité — Africa Speakers Bureau';
+    await this.sendAndLog({
+      template: 'availability-request-notification',
+      to: input.to,
+      subject,
+      html,
+      relatedEntityType: 'AvailabilityRequest',
+      relatedEntityId: input.relatedEntityId,
+    });
+    this.logger.log(`Email de sollicitation envoyé à ${input.to}`);
+  }
+
+  // Phase 3d, §5 — à l'admin qui a envoyé la sollicitation, à la réception
+  // d'une réponse. §3.5 : le sujet/corps ne doivent JAMAIS laisser entendre
+  // qu'une mission est confirmée, quelle que soit la réponse.
+  async sendAvailabilityResponseNotification(
+    input: AvailabilityResponseNotificationInput,
+  ): Promise<void> {
+    const html = this.render('availability-response-notification', {
+      responseStatus: input.responseStatus,
+      backOfficeUrl: input.backOfficeUrl,
+    });
+    const subject =
+      'Réponse à une sollicitation de disponibilité — Africa Speakers Bureau';
+    await this.sendAndLog({
+      template: 'availability-response-notification',
+      to: input.to,
+      subject,
+      html,
+      relatedEntityType: 'AvailabilityRequest',
+      relatedEntityId: input.relatedEntityId,
+    });
+    this.logger.log(`Email de réponse envoyé à ${input.to}`);
+  }
+
+  // Phase 3d, §3.4 — à l'admin qui a envoyé la sollicitation, quand elle
+  // expire sans réponse (RemindersScheduler, même tâche horaire que la 3b).
+  async sendAvailabilityRequestExpired(
+    input: AvailabilityRequestExpiredInput,
+  ): Promise<void> {
+    const html = this.render('availability-request-expired', {
+      backOfficeUrl: input.backOfficeUrl,
+    });
+    const subject =
+      'Sollicitation expirée sans réponse — Africa Speakers Bureau';
+    await this.sendAndLog({
+      template: 'availability-request-expired',
+      to: input.to,
+      subject,
+      html,
+      relatedEntityType: 'AvailabilityRequest',
+      relatedEntityId: input.relatedEntityId,
+    });
+    this.logger.log(`Email d'expiration envoyé à ${input.to}`);
   }
 
   // Consolidation, Partie E — POINT UNIQUE par lequel TOUT envoi de ce

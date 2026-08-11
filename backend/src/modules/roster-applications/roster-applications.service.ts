@@ -757,6 +757,8 @@ export class RosterApplicationsService {
       speakerDisplayName: string;
       speakerSlug: string | null;
       convertedAt: Date;
+      fullName: string;
+      invitationToken: string;
     };
 
     try {
@@ -851,13 +853,21 @@ export class RosterApplicationsService {
             },
           });
 
-          // d. Token d'invitation (§4.4) + email — voir
-          //    CONVERSION_TRANSACTION_TIMEOUT_MS : l'envoi se fait ICI, DANS
-          //    la transaction, DÉLIBÉRÉMENT à l'inverse du fire-and-forget
-          //    utilisé ailleurs dans ce projet (booking-requests, intake
-          //    roster...) : "si une seule étape échoue, RIEN n'est écrit"
-          //    (§4.1) — un échec d'envoi doit annuler tout, aucun compte
-          //    orphelin ni fiche sans propriétaire.
+          // d. Token d'invitation (§4.4) — persisté ICI, dans la
+          //    transaction (écriture DB rapide, comme le reste). L'ENVOI de
+          //    l'email, lui, se fait APRÈS le commit (voir plus bas) : un
+          //    appel SMTP dure plusieurs secondes et garderait des verrous
+          //    ouverts pendant tout ce temps, avec un risque réel de
+          //    timeout de transaction — rencontré concrètement en
+          //    production sur `seed:demo-speakers` (transaction distante
+          //    close avant la fin d'un traitement trop long). Règle valable
+          //    pour TOUT le projet, pas seulement ici (voir CLAUDE.md) :
+          //    aucun envoi d'email ne doit jamais se trouver DANS une
+          //    transaction Prisma. Un échec d'envoi n'annule donc PLUS la
+          //    conversion — le compte, la fiche et le token existent déjà
+          //    et restent valables, seul l'email échoue (journalisé
+          //    FAILED dans email_deliveries, renvoyable via
+          //    POST .../resend-invitation).
           const token = randomBytes(32).toString('hex');
           const ttlDays = this.config.get<number>(
             'INVITATION_TOKEN_TTL_DAYS',
@@ -868,15 +878,6 @@ export class RosterApplicationsService {
           );
           await tx.invitationToken.create({
             data: { userId: user.id, token, expiresAt },
-          });
-
-          const frontendUrl = this.config.get<string>('FRONTEND_URL', '');
-          const invitationUrl = `${frontendUrl}/accept-invitation?token=${token}`;
-          await this.mailService.sendRosterApplicationInvitation({
-            to: user.email,
-            fullName: application.fullName,
-            invitationUrl,
-            relatedEntityId: application.id,
           });
 
           await this.activityLog.record(tx, {
@@ -900,6 +901,8 @@ export class RosterApplicationsService {
             speakerDisplayName: `${speaker.firstName} ${speaker.lastName}`,
             speakerSlug: speaker.slug,
             convertedAt: updatedApplication.convertedAt!,
+            fullName: application.fullName,
+            invitationToken: token,
           };
         },
         { timeout: CONVERSION_TRANSACTION_TIMEOUT_MS },
@@ -920,6 +923,29 @@ export class RosterApplicationsService {
       throw error;
     }
 
+    // Email envoyé APRÈS le commit — voir le commentaire au point d. plus
+    // haut. Un échec ici NE remet PAS en cause la conversion : le compte,
+    // la fiche et le token existent déjà. `invitationSent` reflète le
+    // résultat réel de CETTE tentative (l'admin peut renvoyer l'invitation
+    // si elle est à `false` — voir POST .../resend-invitation).
+    const frontendUrl = this.config.get<string>('FRONTEND_URL', '');
+    const invitationUrl = `${frontendUrl}/accept-invitation?token=${result.invitationToken}`;
+    let invitationSent = true;
+    try {
+      await this.mailService.sendRosterApplicationInvitation({
+        to: result.userEmail,
+        fullName: result.fullName,
+        invitationUrl,
+        relatedEntityId: id,
+      });
+    } catch (error) {
+      invitationSent = false;
+      this.logger.error(
+        `Échec de l'envoi d'invitation pour ${result.userEmail} (candidature ${id})`,
+        error instanceof Error ? error.stack : error,
+      );
+    }
+
     return {
       applicationId: id,
       user: {
@@ -933,7 +959,7 @@ export class RosterApplicationsService {
         slug: result.speakerSlug,
       },
       convertedAt: result.convertedAt,
-      invitationSent: true,
+      invitationSent,
     };
   }
 
