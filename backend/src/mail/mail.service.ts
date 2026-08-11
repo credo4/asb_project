@@ -3,6 +3,8 @@ import { join } from 'path';
 import { Injectable, Logger } from '@nestjs/common';
 import { MailerService } from '@nestjs-modules/mailer';
 import * as Handlebars from 'handlebars';
+import { EmailDeliveryStatus } from '@prisma/client';
+import { PrismaService } from '../prisma/prisma.service';
 
 type TemplateName =
   | 'email-verification'
@@ -21,7 +23,15 @@ type TemplateName =
   | 'speaker-revision-changes-requested'
   | 'speaker-revision-rejected';
 
-export interface BookingRequestTeamNotificationInput {
+// `relatedEntityId` est optionnel PARTOUT (voir sendAndLog) : certains
+// appels n'ont simplement rien à lier (ex. vérification d'email, avant
+// même qu'un profil existe) — le journal reste utile même sans ce lien,
+// juste moins précisément rattachable à une fiche précise.
+interface RelatableInput {
+  relatedEntityId?: number;
+}
+
+export interface BookingRequestTeamNotificationInput extends RelatableInput {
   to: string;
   reference: string;
   serviceType: string;
@@ -32,14 +42,14 @@ export interface BookingRequestTeamNotificationInput {
   backOfficeUrl: string;
 }
 
-export interface BookingRequestAcknowledgmentInput {
+export interface BookingRequestAcknowledgmentInput extends RelatableInput {
   to: string;
   fullName: string;
   reference: string;
   responseDays: number;
 }
 
-export interface BookingRequestAssignedInput {
+export interface BookingRequestAssignedInput extends RelatableInput {
   to: string;
   reference: string;
   fullName: string;
@@ -47,14 +57,14 @@ export interface BookingRequestAssignedInput {
   backOfficeUrl: string;
 }
 
-export interface BookingRequestReminderInput {
+export interface BookingRequestReminderInput extends RelatableInput {
   to: string;
   reference: string;
   message: string;
   backOfficeUrl: string;
 }
 
-export interface RosterApplicationTeamNotificationInput {
+export interface RosterApplicationTeamNotificationInput extends RelatableInput {
   to: string;
   reference: string;
   fullName: string;
@@ -64,47 +74,47 @@ export interface RosterApplicationTeamNotificationInput {
   backOfficeUrl: string;
 }
 
-export interface RosterApplicationAcknowledgmentInput {
+export interface RosterApplicationAcknowledgmentInput extends RelatableInput {
   to: string;
   fullName: string;
   reference: string;
 }
 
-export interface RosterApplicationInfoRequestedInput {
+export interface RosterApplicationInfoRequestedInput extends RelatableInput {
   to: string;
   fullName: string;
   message: string;
 }
 
-export interface RosterApplicationRejectedInput {
+export interface RosterApplicationRejectedInput extends RelatableInput {
   to: string;
   fullName: string;
 }
 
-export interface RosterApplicationInvitationInput {
+export interface RosterApplicationInvitationInput extends RelatableInput {
   to: string;
   fullName: string;
   invitationUrl: string;
 }
 
-export interface SpeakerRevisionTeamNotificationInput {
+export interface SpeakerRevisionTeamNotificationInput extends RelatableInput {
   to: string;
   speakerName: string;
   backOfficeUrl: string;
 }
 
-export interface SpeakerRevisionApprovedInput {
+export interface SpeakerRevisionApprovedInput extends RelatableInput {
   to: string;
   speakerName: string;
 }
 
-export interface SpeakerRevisionChangesRequestedInput {
+export interface SpeakerRevisionChangesRequestedInput extends RelatableInput {
   to: string;
   speakerName: string;
   reviewerComment: string;
 }
 
-export interface SpeakerRevisionRejectedInput {
+export interface SpeakerRevisionRejectedInput extends RelatableInput {
   to: string;
   speakerName: string;
   reviewerComment: string;
@@ -118,21 +128,29 @@ export class MailService {
     HandlebarsTemplateDelegate
   >();
 
-  constructor(private readonly mailer: MailerService) {}
+  constructor(
+    private readonly mailer: MailerService,
+    private readonly prisma: PrismaService,
+  ) {}
 
   async sendEmailVerification(
     to: string,
     firstName: string | null,
     verificationUrl: string,
+    relatedEntityId?: number,
   ): Promise<void> {
     const html = this.render('email-verification', {
       firstName: firstName ?? '',
       verificationUrl,
     });
-    await this.mailer.sendMail({
+    const subject = 'Vérifiez votre adresse email — Africa Speakers Bureau';
+    await this.sendAndLog({
+      template: 'email-verification',
       to,
-      subject: 'Vérifiez votre adresse email — Africa Speakers Bureau',
+      subject,
       html,
+      relatedEntityType: 'User',
+      relatedEntityId,
     });
     this.logger.log(`Email de vérification envoyé à ${to}`);
   }
@@ -141,16 +159,21 @@ export class MailService {
     to: string,
     firstName: string | null,
     resetUrl: string,
+    relatedEntityId?: number,
   ): Promise<void> {
     const html = this.render('password-reset', {
       firstName: firstName ?? '',
       resetUrl,
     });
-    await this.mailer.sendMail({
+    const subject =
+      'Réinitialisation de votre mot de passe — Africa Speakers Bureau';
+    await this.sendAndLog({
+      template: 'password-reset',
       to,
-      subject:
-        'Réinitialisation de votre mot de passe — Africa Speakers Bureau',
+      subject,
       html,
+      relatedEntityType: 'User',
+      relatedEntityId,
     });
     this.logger.log(`Email de réinitialisation envoyé à ${to}`);
   }
@@ -167,10 +190,14 @@ export class MailService {
       summary: input.summary,
       backOfficeUrl: input.backOfficeUrl,
     });
-    await this.mailer.sendMail({
+    const subject = `Nouvelle demande [${input.reference}] — Africa Speakers Bureau`;
+    await this.sendAndLog({
+      template: 'booking-request-team-notification',
       to: input.to,
-      subject: `Nouvelle demande [${input.reference}] — Africa Speakers Bureau`,
+      subject,
       html,
+      relatedEntityType: 'BookingRequest',
+      relatedEntityId: input.relatedEntityId,
     });
     this.logger.log(`Notification interne envoyée pour ${input.reference}`);
   }
@@ -184,10 +211,14 @@ export class MailService {
       responseDays: input.responseDays,
       plural: input.responseDays > 1,
     });
-    await this.mailer.sendMail({
+    const subject = `Nous avons bien reçu votre demande [${input.reference}] — Africa Speakers Bureau`;
+    await this.sendAndLog({
+      template: 'booking-request-acknowledgment',
       to: input.to,
-      subject: `Nous avons bien reçu votre demande [${input.reference}] — Africa Speakers Bureau`,
+      subject,
       html,
+      relatedEntityType: 'BookingRequest',
+      relatedEntityId: input.relatedEntityId,
     });
     this.logger.log(`Accusé de réception envoyé pour ${input.reference}`);
   }
@@ -203,10 +234,14 @@ export class MailService {
       organization: input.organization,
       backOfficeUrl: input.backOfficeUrl,
     });
-    await this.mailer.sendMail({
+    const subject = `Demande [${input.reference}] assignée — Africa Speakers Bureau`;
+    await this.sendAndLog({
+      template: 'booking-request-assigned',
       to: input.to,
-      subject: `Demande [${input.reference}] assignée — Africa Speakers Bureau`,
+      subject,
       html,
+      relatedEntityType: 'BookingRequest',
+      relatedEntityId: input.relatedEntityId,
     });
     this.logger.log(`Email d'assignation envoyé pour ${input.reference}`);
   }
@@ -221,10 +256,14 @@ export class MailService {
       message: input.message,
       backOfficeUrl: input.backOfficeUrl,
     });
-    await this.mailer.sendMail({
+    const subject = `Rappel — demande [${input.reference}] — Africa Speakers Bureau`;
+    await this.sendAndLog({
+      template: 'booking-request-reminder',
       to: input.to,
-      subject: `Rappel — demande [${input.reference}] — Africa Speakers Bureau`,
+      subject,
       html,
+      relatedEntityType: 'BookingRequest',
+      relatedEntityId: input.relatedEntityId,
     });
     this.logger.log(`Email de rappel envoyé pour ${input.reference}`);
   }
@@ -240,10 +279,14 @@ export class MailService {
       expertiseArea: input.expertiseArea ?? '',
       backOfficeUrl: input.backOfficeUrl,
     });
-    await this.mailer.sendMail({
+    const subject = `Nouvelle candidature [${input.reference}] — Africa Speakers Bureau`;
+    await this.sendAndLog({
+      template: 'roster-application-team-notification',
       to: input.to,
-      subject: `Nouvelle candidature [${input.reference}] — Africa Speakers Bureau`,
+      subject,
       html,
+      relatedEntityType: 'RosterApplication',
+      relatedEntityId: input.relatedEntityId,
     });
     this.logger.log(`Notification interne envoyée pour ${input.reference}`);
   }
@@ -255,10 +298,14 @@ export class MailService {
       fullName: input.fullName,
       reference: input.reference,
     });
-    await this.mailer.sendMail({
+    const subject = `Merci pour votre candidature [${input.reference}] — Africa Speakers Bureau`;
+    await this.sendAndLog({
+      template: 'roster-application-acknowledgment',
       to: input.to,
-      subject: `Merci pour votre candidature [${input.reference}] — Africa Speakers Bureau`,
+      subject,
       html,
+      relatedEntityType: 'RosterApplication',
+      relatedEntityId: input.relatedEntityId,
     });
     this.logger.log(`Accusé de réception envoyé pour ${input.reference}`);
   }
@@ -272,11 +319,15 @@ export class MailService {
       fullName: input.fullName,
       message: input.message,
     });
-    await this.mailer.sendMail({
+    const subject =
+      'Complément demandé pour votre candidature — Africa Speakers Bureau';
+    await this.sendAndLog({
+      template: 'roster-application-info-requested',
       to: input.to,
-      subject:
-        'Complément demandé pour votre candidature — Africa Speakers Bureau',
+      subject,
       html,
+      relatedEntityType: 'RosterApplication',
+      relatedEntityId: input.relatedEntityId,
     });
     this.logger.log(`Email de demande d'informations envoyé à ${input.to}`);
   }
@@ -289,10 +340,14 @@ export class MailService {
     const html = this.render('roster-application-rejected', {
       fullName: input.fullName,
     });
-    await this.mailer.sendMail({
+    const subject = 'À propos de votre candidature — Africa Speakers Bureau';
+    await this.sendAndLog({
+      template: 'roster-application-rejected',
       to: input.to,
-      subject: 'À propos de votre candidature — Africa Speakers Bureau',
+      subject,
       html,
+      relatedEntityType: 'RosterApplication',
+      relatedEntityId: input.relatedEntityId,
     });
     this.logger.log(`Email de refus envoyé à ${input.to}`);
   }
@@ -300,7 +355,13 @@ export class MailService {
   // §4.4 (Phase 3c) — envoyé DANS la transaction de conversion
   // (RosterApplicationsService#convert) : un échec ici annule TOUTE la
   // conversion (aucun compte orphelin), contrairement au reste des emails
-  // de ce service qui sont volontairement best-effort.
+  // de ce service qui sont volontairement best-effort. La ligne
+  // email_deliveries, elle, est écrite via `this.prisma` (PAS le `tx` de
+  // l'appelant — sendAndLog n'a pas accès à un client de transaction
+  // externe) : DÉLIBÉRÉMENT indépendante de la transaction englobante, pour
+  // que la trace "cet envoi a échoué" survive même si la conversion est
+  // annulée juste après — un journal d'audit qui disparaîtrait avec
+  // l'opération qu'il a fait échouer serait inutile.
   async sendRosterApplicationInvitation(
     input: RosterApplicationInvitationInput,
   ): Promise<void> {
@@ -308,10 +369,14 @@ export class MailService {
       fullName: input.fullName,
       invitationUrl: input.invitationUrl,
     });
-    await this.mailer.sendMail({
+    const subject = 'Votre candidature a été retenue — Africa Speakers Bureau';
+    await this.sendAndLog({
+      template: 'roster-application-invitation',
       to: input.to,
-      subject: 'Votre candidature a été retenue — Africa Speakers Bureau',
+      subject,
       html,
+      relatedEntityType: 'RosterApplication',
+      relatedEntityId: input.relatedEntityId,
     });
     this.logger.log(`Email d'invitation envoyé à ${input.to}`);
   }
@@ -323,10 +388,14 @@ export class MailService {
       speakerName: input.speakerName,
       backOfficeUrl: input.backOfficeUrl,
     });
-    await this.mailer.sendMail({
+    const subject = `Révision de profil soumise — ${input.speakerName} — Africa Speakers Bureau`;
+    await this.sendAndLog({
+      template: 'speaker-revision-team-notification',
       to: input.to,
-      subject: `Révision de profil soumise — ${input.speakerName} — Africa Speakers Bureau`,
+      subject,
       html,
+      relatedEntityType: 'SpeakerRevision',
+      relatedEntityId: input.relatedEntityId,
     });
     this.logger.log(
       `Notification interne envoyée pour la révision de ${input.speakerName}`,
@@ -339,10 +408,15 @@ export class MailService {
     const html = this.render('speaker-revision-approved', {
       speakerName: input.speakerName,
     });
-    await this.mailer.sendMail({
+    const subject =
+      'Vos modifications ont été approuvées — Africa Speakers Bureau';
+    await this.sendAndLog({
+      template: 'speaker-revision-approved',
       to: input.to,
-      subject: 'Vos modifications ont été approuvées — Africa Speakers Bureau',
+      subject,
       html,
+      relatedEntityType: 'SpeakerRevision',
+      relatedEntityId: input.relatedEntityId,
     });
     this.logger.log(`Email d'approbation envoyé à ${input.to}`);
   }
@@ -354,11 +428,15 @@ export class MailService {
       speakerName: input.speakerName,
       reviewerComment: input.reviewerComment,
     });
-    await this.mailer.sendMail({
+    const subject =
+      'Corrections demandées sur votre profil — Africa Speakers Bureau';
+    await this.sendAndLog({
+      template: 'speaker-revision-changes-requested',
       to: input.to,
-      subject:
-        'Corrections demandées sur votre profil — Africa Speakers Bureau',
+      subject,
       html,
+      relatedEntityType: 'SpeakerRevision',
+      relatedEntityId: input.relatedEntityId,
     });
     this.logger.log(`Email de demande de correction envoyé à ${input.to}`);
   }
@@ -370,13 +448,95 @@ export class MailService {
       speakerName: input.speakerName,
       reviewerComment: input.reviewerComment,
     });
-    await this.mailer.sendMail({
+    const subject =
+      'À propos de vos modifications de profil — Africa Speakers Bureau';
+    await this.sendAndLog({
+      template: 'speaker-revision-rejected',
       to: input.to,
-      subject:
-        'À propos de vos modifications de profil — Africa Speakers Bureau',
+      subject,
       html,
+      relatedEntityType: 'SpeakerRevision',
+      relatedEntityId: input.relatedEntityId,
     });
     this.logger.log(`Email de refus envoyé à ${input.to}`);
+  }
+
+  // Consolidation, Partie E — POINT UNIQUE par lequel TOUT envoi de ce
+  // service transite : écrit une ligne email_deliveries (PENDING avant la
+  // tentative, SENT/FAILED après), puis se comporte exactement comme avant
+  // pour l'appelant — il propage l'erreur si l'envoi échoue, ne l'avale
+  // jamais ici (chaque appelant garde son propre try/catch existant,
+  // capturant déjà ces échecs sans jamais faire tomber l'opération
+  // métier). Le journal est un OBSERVATEUR, jamais un participant : une
+  // panne de son écriture (DB indisponible pendant l'audit) ne doit
+  // JAMAIS empêcher la tentative d'envoi elle-même — capturée et loguée en
+  // interne, sans re-throw.
+  private async sendAndLog(params: {
+    template: TemplateName;
+    to: string;
+    subject: string;
+    html: string;
+    relatedEntityType?: string;
+    relatedEntityId?: number;
+  }): Promise<void> {
+    let deliveryId: number | undefined;
+    try {
+      const delivery = await this.prisma.emailDelivery.create({
+        data: {
+          template: params.template,
+          recipient: params.to,
+          subject: params.subject,
+          status: EmailDeliveryStatus.PENDING,
+          relatedEntityType: params.relatedEntityType,
+          relatedEntityId: params.relatedEntityId,
+        },
+      });
+      deliveryId = delivery.id;
+    } catch (logError) {
+      this.logger.error(
+        "Échec de la création du journal d'envoi (ignoré, l'envoi se poursuit quand même)",
+        logError instanceof Error ? logError.stack : logError,
+      );
+    }
+
+    try {
+      await this.mailer.sendMail({
+        to: params.to,
+        subject: params.subject,
+        html: params.html,
+      });
+      if (deliveryId !== undefined) {
+        await this.markDelivery(deliveryId, {
+          status: EmailDeliveryStatus.SENT,
+          sentAt: new Date(),
+        });
+      }
+    } catch (error) {
+      if (deliveryId !== undefined) {
+        const message = error instanceof Error ? error.message : String(error);
+        await this.markDelivery(deliveryId, {
+          status: EmailDeliveryStatus.FAILED,
+          // Bornée : une erreur SMTP peut embarquer une réponse serveur
+          // verbeuse, pas de raison de la stocker en entier.
+          errorMessage: message.slice(0, 2000),
+        });
+      }
+      throw error; // comportement inchangé pour l'appelant (cf. commentaire ci-dessus)
+    }
+  }
+
+  private async markDelivery(
+    id: number,
+    data: { status: EmailDeliveryStatus; sentAt?: Date; errorMessage?: string },
+  ): Promise<void> {
+    try {
+      await this.prisma.emailDelivery.update({ where: { id }, data });
+    } catch (updateError) {
+      this.logger.error(
+        "Échec de la mise à jour du journal d'envoi (ignoré)",
+        updateError instanceof Error ? updateError.stack : updateError,
+      );
+    }
   }
 
   private render(

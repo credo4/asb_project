@@ -20,6 +20,7 @@ import { SpeakerDocumentsModule } from './modules/speaker-documents/speaker-docu
 import { SpeakerAvailabilityModule } from './modules/speaker-availability/speaker-availability.module';
 import { ClientsModule } from './modules/clients/clients.module';
 import { AnalyticsModule } from './modules/analytics/analytics.module';
+import { CuratedListsModule } from './modules/curated-lists/curated-lists.module';
 import { PublicModule } from './modules/public/public.module';
 import { resolveStorageRoot } from './storage/resolve-storage-root';
 import { JwtAuthGuard } from './common/guards/jwt-auth.guard';
@@ -75,6 +76,7 @@ import { RolesGuard } from './common/guards/roles.guard';
     SpeakerAvailabilityModule,
     ClientsModule,
     AnalyticsModule,
+    CuratedListsModule,
     PublicModule,
   ],
   providers: [

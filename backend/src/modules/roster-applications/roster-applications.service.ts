@@ -19,6 +19,7 @@ import {
 import { PrismaService } from '../../prisma/prisma.service';
 import { ActivityLogService } from '../../activity-log/activity-log.service';
 import { MailService } from '../../mail/mail.service';
+import { EmailDeliveriesService } from '../../mail/email-deliveries.service';
 import {
   AuthService,
   BCRYPT_COST_FACTOR,
@@ -80,6 +81,7 @@ export class RosterApplicationsService {
     private readonly prisma: PrismaService,
     private readonly activityLog: ActivityLogService,
     private readonly mailService: MailService,
+    private readonly emailDeliveries: EmailDeliveriesService,
     private readonly config: ConfigService,
     private readonly authService: AuthService,
   ) {}
@@ -173,6 +175,7 @@ export class RosterApplicationsService {
           workEmail: application.workEmail,
           expertiseArea: application.expertiseArea,
           backOfficeUrl: `${frontendUrl ?? ''}/roster-applications/${application.id}`,
+          relatedEntityId: application.id,
         });
       } catch (error) {
         this.logger.error(
@@ -191,6 +194,7 @@ export class RosterApplicationsService {
         to: application.workEmail,
         fullName: application.fullName,
         reference: application.reference,
+        relatedEntityId: application.id,
       });
     } catch (error) {
       this.logger.error(
@@ -278,11 +282,17 @@ export class RosterApplicationsService {
       throw new NotFoundException(`Candidature ${id} introuvable.`);
     }
 
-    const duplicateEmails = await this.computeDuplicateEmailFlags([
-      row.workEmail,
+    const [duplicateEmails, emailDeliveries] = await Promise.all([
+      this.computeDuplicateEmailFlags([row.workEmail]),
+      // §E (consolidation) — voir EmailDeliverySummaryDto.
+      this.emailDeliveries.findForEntity('RosterApplication', id),
     ]);
 
-    return toDetailDto(row, duplicateEmails.has(row.workEmail.toLowerCase()));
+    return toDetailDto(
+      row,
+      duplicateEmails.has(row.workEmail.toLowerCase()),
+      emailDeliveries,
+    );
   }
 
   // GET /admin/roster-applications/:id/history — même principe que
@@ -629,6 +639,7 @@ export class RosterApplicationsService {
         to: application.workEmail,
         fullName: application.fullName,
         message: dto.message,
+        relatedEntityId: application.id,
       });
       await this.activityLog.record(this.prisma, {
         actorId: actor.id,
@@ -705,6 +716,7 @@ export class RosterApplicationsService {
         await this.mailService.sendRosterApplicationRejected({
           to: application.workEmail,
           fullName: application.fullName,
+          relatedEntityId: application.id,
         });
         await this.activityLog.record(this.prisma, {
           actorId: actor.id,
@@ -864,6 +876,7 @@ export class RosterApplicationsService {
             to: user.email,
             fullName: application.fullName,
             invitationUrl,
+            relatedEntityId: application.id,
           });
 
           await this.activityLog.record(tx, {
@@ -1140,6 +1153,7 @@ export class RosterApplicationsService {
         fullName:
           `${user.firstName ?? ''} ${user.lastName ?? ''}`.trim() || user.email,
         invitationUrl,
+        relatedEntityId: id,
       });
     } catch (error) {
       this.logger.error(

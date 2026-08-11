@@ -4,6 +4,29 @@ import { IsEnum, IsInt, IsOptional, IsString, Max, Min } from 'class-validator';
 import { FeeTierPublic } from '@prisma/client';
 import { PUBLIC_MAX_PER_PAGE } from '../public-speaker.constants';
 
+// Partie A (consolidation) — ALLOW-LIST FERMÉE des critères de tri
+// autorisés côté public. Deux raisons de ne JAMAIS accepter un nom de
+// colonne libre venant du client :
+//   1. Injection de tri : un nom de colonne arbitraire passé tel quel dans
+//      un ORDER BY est une classe de vulnérabilité connue.
+//   2. Fuite d'information PAR L'ORDRE des résultats : trier par un champ
+//      jamais AFFICHÉ (ex. un tarif réel) permettrait de reconstituer un
+//      classement, donc une estimation du tarif, sans jamais l'exposer
+//      directement — l'invariant public/privé (CLAUDE.md §5) porte sur les
+//      CHAMPS renvoyés, mais un tri sur un champ interne le contournerait
+//      silencieusement. `@IsEnum` rejette (400) toute valeur hors de cette
+//      liste : structurellement impossible de trier par un champ non listé
+//      ici, quel que soit ce qui existe par ailleurs sur `Speaker`.
+export enum PublicSpeakerSortBy {
+  NAME = 'name',
+  PUBLISHED_AT = 'publishedAt',
+}
+
+export enum PublicSortOrder {
+  ASC = 'asc',
+  DESC = 'desc',
+}
+
 export class QueryPublicSpeakersDto {
   @ApiPropertyOptional({ minimum: 1, default: 1 })
   @IsOptional()
@@ -61,4 +84,22 @@ export class QueryPublicSpeakersDto {
   @IsOptional()
   @IsString()
   q?: string;
+
+  @ApiPropertyOptional({
+    enum: PublicSpeakerSortBy,
+    description:
+      'Absent = ordre par défaut (isTopRequested desc, isFeaturedHome desc, nom asc).',
+  })
+  @IsOptional()
+  @IsEnum(PublicSpeakerSortBy)
+  sortBy?: PublicSpeakerSortBy;
+
+  @ApiPropertyOptional({
+    enum: PublicSortOrder,
+    description:
+      'Ignoré si sortBy est absent. Défaut par champ : asc pour name, desc (plus récent en premier) pour publishedAt.',
+  })
+  @IsOptional()
+  @IsEnum(PublicSortOrder)
+  sortOrder?: PublicSortOrder;
 }

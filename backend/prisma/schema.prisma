@@ -483,13 +483,18 @@ model Speaker {
   // relation "mediaAssets" séparée.
   media       SpeakerMedia[]        @relation("SpeakerMedia")
 
-  bookingRequests     BookingRequest[]            @relation("RequestedSpeaker")
-  sourceApplication   RosterApplication?          @relation("ApplicationConversion")
-  revisions           SpeakerRevision[]           @relation("SpeakerRevisions")
-  documents           SpeakerDocument[]           @relation("SpeakerDocuments")
-  availabilityPeriods SpeakerAvailabilityPeriod[] @relation("SpeakerAvailabilityPeriods")
-  travelPreference    SpeakerTravelPreference?    @relation("SpeakerTravelPreference")
-  analyticsEvents     AnalyticsEvent[]            @relation("SpeakerAnalyticsEvents")
+  bookingRequests        BookingRequest[]            @relation("RequestedSpeaker")
+  sourceApplication      RosterApplication?          @relation("ApplicationConversion")
+  revisions              SpeakerRevision[]           @relation("SpeakerRevisions")
+  documents              SpeakerDocument[]           @relation("SpeakerDocuments")
+  availabilityPeriods    SpeakerAvailabilityPeriod[] @relation("SpeakerAvailabilityPeriods")
+  travelPreference       SpeakerTravelPreference?    @relation("SpeakerTravelPreference")
+  analyticsEvents        AnalyticsEvent[]            @relation("SpeakerAnalyticsEvents")
+  // Listes éditoriales (consolidation, Partie B) — DISTINCT du drapeau
+  // isTopRequested ci-dessus (voir CLAUDE.md §6) : appartenance à une ou
+  // plusieurs collections thématiques, gérée par admin, jamais un doublon de
+  // "Top Requested".
+  curatedListMemberships CuratedListSpeaker[]        @relation("CuratedListMemberships")
 
   @@index([status])
   @@index([isTopRequested])
@@ -1192,6 +1197,72 @@ model SpeakerRevision {
 }
 
 // =============================================================================
+// LISTES ÉDITORIALES (CURATED LISTS) — cf. cahier des charges §10.4
+// (consolidation Phase 3, Partie B).
+// -----------------------------------------------------------------------------
+// DISTINCT du drapeau `Speaker.isTopRequested` (voir CLAUDE.md §6) : ce
+// drapeau alimente déjà `GET /public/speakers/top-requested` et reste LE
+// mécanisme "Top Requested Speakers" — cette table ne le duplique pas. Les
+// listes éditoriales servent aux COLLECTIONS THÉMATIQUES gérées par
+// l'équipe (« Top Fintech Voices », « Leading Women in Governance »,
+// « Emerging African Innovators »…), une catégorie de contenu différente.
+//
+// `selectionMode` réserve la valeur AUTO (sélection par règle, ex. "tous
+// les speakers du pilier X") pour plus tard : NON implémentée ici,
+// MANUAL est la seule valeur utilisable à cette étape (adhésion gérée à
+// la main via `curated_list_speakers`).
+// =============================================================================
+
+enum CuratedListStatus {
+  DRAFT
+  PUBLISHED
+}
+
+enum CuratedListSelectionMode {
+  MANUAL
+  AUTO // réservé, pas implémenté à cette étape — voir le commentaire ci-dessus
+}
+
+model CuratedList {
+  id            Int                      @id @default(autoincrement())
+  title         String                   @db.VarChar(200)
+  slug          String                   @unique @db.VarChar(220)
+  description   String?                  @db.Text
+  imageUrl      String?                  @map("image_url") @db.VarChar(500)
+  displayOrder  Int                      @default(0) @map("display_order")
+  status        CuratedListStatus        @default(DRAFT)
+  publishedAt   DateTime?                @map("published_at")
+  selectionMode CuratedListSelectionMode @default(MANUAL) @map("selection_mode")
+  createdAt     DateTime                 @default(now()) @map("created_at")
+  updatedAt     DateTime                 @updatedAt @map("updated_at")
+  deletedAt     DateTime?                @map("deleted_at")
+
+  members         CuratedListSpeaker[]
+  analyticsEvents AnalyticsEvent[]     @relation("CuratedListAnalyticsEvents")
+
+  @@index([status])
+  @@map("curated_lists")
+}
+
+// Table de jonction, même pattern que SpeakerPillar/SpeakerFormat.
+// `displayOrder` piloté par l'admin (voir PUT .../members/reorder, même
+// stratégie "permutation exacte" que SpeakerMediaController#reorder).
+model CuratedListSpeaker {
+  id           Int      @id @default(autoincrement())
+  listId       Int      @map("list_id")
+  speakerId    Int      @map("speaker_id")
+  displayOrder Int      @default(0) @map("display_order")
+  createdAt    DateTime @default(now()) @map("created_at")
+
+  list    CuratedList @relation(fields: [listId], references: [id], onDelete: Cascade)
+  speaker Speaker     @relation("CuratedListMemberships", fields: [speakerId], references: [id], onDelete: Cascade)
+
+  @@unique([listId, speakerId])
+  @@index([speakerId])
+  @@map("curated_list_speakers")
+}
+
+// =============================================================================
 // JOURNAL D'ACTIVITÉ (transversal, utile dès le départ — cf. §23)
 // =============================================================================
 
@@ -1215,6 +1286,58 @@ model ActivityLog {
 }
 
 // =============================================================================
+// JOURNAL D'ENVOI DES EMAILS (consolidation, Partie E)
+// -----------------------------------------------------------------------------
+// Un échec SMTP était jusqu'ici capturé, logué (Logger), et invisible
+// PARTOUT ailleurs — en production, une panne d'envoi passerait inaperçue
+// des semaines. TOUTES les tentatives d'envoi du projet passent désormais
+// par MailService#sendAndLog (voir mail.service.ts) : notifications
+// internes, accusés de réception, invitations, notifications de révision,
+// rappels — un seul chemin d'écriture, jamais un email envoyé en
+// contournant cette table.
+//
+// Comportement inchangé côté appelant (CLAUDE.md) : un échec d'envoi ne
+// fait JAMAIS échouer l'opération métier qui l'a déclenché — ce journal
+// est un observateur, jamais un participant au flux (la ligne FAILED est
+// écrite, puis l'erreur d'origine est quand même re-levée pour que
+// l'appelant garde exactement le même comportement de capture qu'avant).
+//
+// Volontairement PAS de mécanisme de réessai automatique ici (hors
+// périmètre de cette étape) — juste la visibilité : GET
+// /admin/email-deliveries (paginé, filtrable) et le statut des envois liés
+// à une demande/candidature dans sa vue détaillée.
+// =============================================================================
+
+enum EmailDeliveryStatus {
+  PENDING
+  SENT
+  FAILED
+}
+
+model EmailDelivery {
+  id                Int                 @id @default(autoincrement())
+  template          String              @db.VarChar(80)
+  recipient         String              @db.VarChar(191)
+  subject           String              @db.VarChar(255)
+  status            EmailDeliveryStatus @default(PENDING)
+  errorMessage      String?             @map("error_message") @db.Text
+  attemptedAt       DateTime            @default(now()) @map("attempted_at")
+  sentAt            DateTime?           @map("sent_at")
+  // Lien optionnel vers l'entité à l'origine de l'envoi (ex. "BookingRequest"
+  // #42) — PAS une vraie relation Prisma : ce journal doit pouvoir référencer
+  // n'importe quelle table (BookingRequest, RosterApplication, User,
+  // SpeakerRevision...) sans lui être couplé, même pattern que
+  // ActivityLog.entityType/entityId ci-dessus.
+  relatedEntityType String?             @map("related_entity_type") @db.VarChar(80)
+  relatedEntityId   Int?                @map("related_entity_id")
+
+  @@index([status])
+  @@index([attemptedAt])
+  @@index([relatedEntityType, relatedEntityId])
+  @@map("email_deliveries")
+}
+
+// =============================================================================
 // TRAÇAGE ANALYTICS (Phase 3, étape 3a — cf. §14.1/§14.3)
 // -----------------------------------------------------------------------------
 // Brut, PAS agrégé : aucun compteur dénormalisé, aucune vue matérialisée ici —
@@ -1234,20 +1357,28 @@ model ActivityLog {
 // =============================================================================
 
 model AnalyticsEvent {
-  id          Int                @id @default(autoincrement())
-  type        AnalyticsEventType
-  speakerId   Int?               @map("speaker_id")
-  payload     Json?
-  visitorHash String             @map("visitor_hash") @db.VarChar(64)
-  isBot       Boolean            @default(false) @map("is_bot")
-  userAgent   String?            @map("user_agent") @db.VarChar(255)
-  referrer    String?            @db.VarChar(255)
-  createdAt   DateTime           @default(now()) @map("created_at")
+  id            Int                @id @default(autoincrement())
+  type          AnalyticsEventType
+  speakerId     Int?               @map("speaker_id")
+  // Consolidation, Partie C — pendant de `speakerId` pour CURATED_LIST_VIEW :
+  // résolu côté serveur depuis `curatedListSlug` (voir
+  // CreateAnalyticsEventDto/PublicAnalyticsController), jamais un id transmis
+  // par le client (même principe que speakerId, cf. CLAUDE.md §5 — aucun
+  // identifiant interne ne transite par l'API publique, dans AUCUN sens).
+  curatedListId Int?               @map("curated_list_id")
+  payload       Json?
+  visitorHash   String             @map("visitor_hash") @db.VarChar(64)
+  isBot         Boolean            @default(false) @map("is_bot")
+  userAgent     String?            @map("user_agent") @db.VarChar(255)
+  referrer      String?            @db.VarChar(255)
+  createdAt     DateTime           @default(now()) @map("created_at")
 
-  speaker Speaker? @relation("SpeakerAnalyticsEvents", fields: [speakerId], references: [id], onDelete: SetNull)
+  speaker     Speaker?     @relation("SpeakerAnalyticsEvents", fields: [speakerId], references: [id], onDelete: SetNull)
+  curatedList CuratedList? @relation("CuratedListAnalyticsEvents", fields: [curatedListId], references: [id], onDelete: SetNull)
 
   @@index([type])
   @@index([speakerId])
+  @@index([curatedListId])
   @@index([createdAt])
   @@map("analytics_events")
 }

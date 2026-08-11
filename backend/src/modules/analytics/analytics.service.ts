@@ -1,7 +1,12 @@
 import { createHmac } from 'crypto';
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { AnalyticsEventType, Prisma } from '@prisma/client';
+import {
+  AnalyticsEventType,
+  CuratedListStatus,
+  Prisma,
+  SpeakerStatus,
+} from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
 import { QueryAnalyticsEventsDto } from './dto/query-analytics-events.dto';
 import { AnalyticsEventListResponseDto } from './dto/outputs/analytics-event-item.dto';
@@ -14,6 +19,7 @@ import {
 export interface RecordEventParams {
   type: AnalyticsEventType;
   speakerId?: number;
+  curatedListId?: number;
   payload?: Prisma.InputJsonValue;
   ip: string;
   userAgent?: string;
@@ -84,6 +90,7 @@ export class AnalyticsService {
         data: {
           type: params.type,
           speakerId: params.speakerId,
+          curatedListId: params.curatedListId,
           payload: params.payload,
           visitorHash,
           isBot,
@@ -97,6 +104,32 @@ export class AnalyticsService {
         error instanceof Error ? error.stack : error,
       );
     }
+  }
+
+  // Consolidation, Partie C — résout un slug PUBLIC (jamais un id) en
+  // identifiant interne, AVANT tout enregistrement. `null` = slug inconnu
+  // OU speaker non publié/masqué : dans les deux cas, l'appelant doit
+  // ignorer l'événement plutôt que d'écrire un id trompeur (voir
+  // PublicAnalyticsController).
+  async resolveSpeakerIdBySlug(slug: string): Promise<number | null> {
+    const speaker = await this.prisma.speaker.findFirst({
+      where: {
+        slug,
+        status: SpeakerStatus.PUBLISHED,
+        isVisible: true,
+        deletedAt: null,
+      },
+      select: { id: true },
+    });
+    return speaker?.id ?? null;
+  }
+
+  async resolveCuratedListIdBySlug(slug: string): Promise<number | null> {
+    const list = await this.prisma.curatedList.findFirst({
+      where: { slug, status: CuratedListStatus.PUBLISHED, deletedAt: null },
+      select: { id: true },
+    });
+    return list?.id ?? null;
   }
 
   // GET /admin/analytics/events (§B6) — UNIQUEMENT pour vérifier que les
@@ -131,6 +164,7 @@ export class AnalyticsService {
         id: row.id,
         type: row.type,
         speakerId: row.speakerId,
+        curatedListId: row.curatedListId,
         payload: row.payload as Record<string, unknown> | null,
         isBot: row.isBot,
         referrer: row.referrer,

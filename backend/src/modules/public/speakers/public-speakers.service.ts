@@ -1,7 +1,11 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../../../prisma/prisma.service';
-import { QueryPublicSpeakersDto } from '../dto/query-public-speakers.dto';
+import {
+  PublicSortOrder,
+  PublicSpeakerSortBy,
+  QueryPublicSpeakersDto,
+} from '../dto/query-public-speakers.dto';
 import {
   PublicSpeakerListItemDto,
   PublicSpeakerListResponseDto,
@@ -50,7 +54,7 @@ export class PublicSpeakersService {
       this.prisma.speaker.count({ where }),
       this.prisma.speaker.findMany({
         where,
-        orderBy: DEFAULT_ORDER_BY,
+        orderBy: this.buildOrderBy(query),
         skip: (page - 1) * perPage,
         take: perPage,
         select: PUBLIC_SPEAKER_LIST_SELECT,
@@ -105,6 +109,30 @@ export class PublicSpeakersService {
     });
 
     return rows.map(toPublicListItemDto);
+  }
+
+  // §A — voir l'allow-list fermée sur QueryPublicSpeakersDto. `sortBy`
+  // absent = comportement inchangé (DEFAULT_ORDER_BY, celui d'avant cette
+  // étape) : aucune régression pour un appelant qui n'envoie jamais ce
+  // paramètre.
+  private buildOrderBy(
+    query: QueryPublicSpeakersDto,
+  ): Prisma.SpeakerOrderByWithRelationInput[] {
+    if (!query.sortBy) {
+      return DEFAULT_ORDER_BY;
+    }
+    switch (query.sortBy) {
+      case PublicSpeakerSortBy.NAME: {
+        const order = query.sortOrder ?? PublicSortOrder.ASC;
+        return [{ lastName: order }, { firstName: order }];
+      }
+      case PublicSpeakerSortBy.PUBLISHED_AT: {
+        // Plus récent en premier par défaut — c'est l'attente naturelle
+        // d'un tri "par date de publication" sur une liste publique.
+        const order = query.sortOrder ?? PublicSortOrder.DESC;
+        return [{ publishedAt: order }];
+      }
+    }
   }
 
   private buildWhere(query: QueryPublicSpeakersDto): Prisma.SpeakerWhereInput {

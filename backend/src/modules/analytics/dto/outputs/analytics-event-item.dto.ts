@@ -8,6 +8,7 @@ export class AnalyticsEventItemDto {
   id!: number;
   type!: AnalyticsEventType;
   speakerId!: number | null;
+  curatedListId!: number | null;
   payload!: Record<string, unknown> | null;
   isBot!: boolean;
   referrer!: string | null;

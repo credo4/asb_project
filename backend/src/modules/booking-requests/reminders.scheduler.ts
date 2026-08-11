@@ -49,6 +49,7 @@ export class RemindersScheduler {
           reference: reminder.request.reference,
           message: reminder.message,
           backOfficeUrl: `${frontendUrl}/booking-requests/${reminder.request.id}`,
+          relatedEntityId: reminder.request.id,
         });
       } catch (error) {
         this.logger.error(
@@ -87,6 +88,7 @@ export class RemindersScheduler {
           reference: request.reference,
           message: 'Cette demande est en retard (délai de réponse dépassé).',
           backOfficeUrl: `${frontendUrl}/booking-requests/${request.id}`,
+          relatedEntityId: request.id,
         });
       } catch (error) {
         this.logger.error(

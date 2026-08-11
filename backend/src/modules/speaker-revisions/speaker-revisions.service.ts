@@ -803,6 +803,7 @@ export class SpeakerRevisionsService {
         speakerName:
           speaker.publicName ?? `${speaker.firstName} ${speaker.lastName}`,
         backOfficeUrl: `${frontendUrl ?? ''}/speaker-revisions/${revision.id}`,
+        relatedEntityId: revision.id,
       });
     } catch (error) {
       this.logger.error(
@@ -821,6 +822,7 @@ export class SpeakerRevisionsService {
       await this.mailService.sendSpeakerRevisionApproved({
         to: email,
         speakerName: toSpeakerRef(revision.speaker).displayName,
+        relatedEntityId: revision.id,
       });
     } catch (error) {
       this.logger.error(
@@ -840,6 +842,7 @@ export class SpeakerRevisionsService {
         to: email,
         speakerName: toSpeakerRef(revision.speaker).displayName,
         reviewerComment: revision.reviewerComment ?? '',
+        relatedEntityId: revision.id,
       });
     } catch (error) {
       this.logger.error(
@@ -859,6 +862,7 @@ export class SpeakerRevisionsService {
         to: email,
         speakerName: toSpeakerRef(revision.speaker).displayName,
         reviewerComment: revision.reviewerComment ?? '',
+        relatedEntityId: revision.id,
       });
     } catch (error) {
       this.logger.error(

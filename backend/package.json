@@ -20,6 +20,8 @@
     "test:e2e": "jest --config ./test/jest-e2e.json",
     "seed": "ts-node --transpile-only prisma/seed.ts",
     "backfill:contacts": "ts-node --transpile-only scripts/backfill-contacts.ts",
+    "cleanup:test-data": "ts-node --transpile-only scripts/cleanup-test-data.ts",
+    "seed:demo-speakers": "ts-node --transpile-only scripts/seed-demo-speakers.ts",
     "docs:export": "ts-node --transpile-only scripts/export-openapi.ts",
     "db:deploy": "prisma migrate deploy"
   },

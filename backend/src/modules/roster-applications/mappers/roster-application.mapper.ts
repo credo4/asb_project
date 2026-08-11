@@ -13,6 +13,7 @@ import {
   ConvertedUserRefDto,
 } from '../dto/outputs/reference.dto';
 import { computeAggregatedScore } from '../aggregated-score.util';
+import { EmailDeliverySummaryDto } from '../../../mail/dto/outputs/email-delivery-item.dto';
 
 export function toAdminRef(
   admin: RosterApplicationRow['assignedAdmin'],
@@ -107,6 +108,7 @@ export function toListItemDto(
 export function toDetailDto(
   row: RosterApplicationDetailRow,
   hasDuplicateEmail: boolean,
+  emailDeliveries: EmailDeliverySummaryDto[],
 ): RosterApplicationDetailDto {
   return {
     id: row.id,
@@ -135,6 +137,7 @@ export function toDetailDto(
     aggregatedScore: computeAggregatedScore(row.evaluations),
 
     attachments: row.attachments.map(toAttachmentDto),
+    emailDeliveries,
 
     hasDuplicateEmail,
 

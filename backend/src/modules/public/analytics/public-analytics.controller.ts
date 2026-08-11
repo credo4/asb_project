@@ -4,6 +4,7 @@ import {
   HttpStatus,
   Post,
   Body,
+  Logger,
   Req,
 } from '@nestjs/common';
 import { Throttle } from '@nestjs/throttler';
@@ -27,6 +28,8 @@ import { fireAndForget } from '../../analytics/fire-and-forget.util';
 @Public()
 @Throttle({ default: { limit: 60, ttl: 60_000 } })
 export class PublicAnalyticsController {
+  private readonly logger = new Logger(PublicAnalyticsController.name);
+
   constructor(private readonly analytics: AnalyticsService) {}
 
   @Post('events')
@@ -39,16 +42,55 @@ export class PublicAnalyticsController {
     @Body() dto: CreateAnalyticsEventDto,
     @Req() req: Request,
   ): { accepted: true } {
-    fireAndForget(() =>
-      this.analytics.record({
+    // Consolidation, Partie C — la résolution slug -> id se fait ICI, DANS
+    // le fire-and-forget : c'est une lecture DB comme le reste de
+    // l'écriture, elle ne doit jamais ralentir la réponse 202 déjà partie.
+    // Un slug inconnu (ou un speaker/une liste non publié·e) ne fait
+    // JAMAIS échouer quoi que ce soit : l'événement est simplement ignoré,
+    // et compté comme rejeté dans les logs (§C) — jamais une erreur
+    // renvoyée au client, jamais un id transmis dans la requête OU la
+    // réponse.
+    fireAndForget(async () => {
+      let speakerId: number | undefined;
+      if (dto.speakerSlug) {
+        const resolved = await this.analytics.resolveSpeakerIdBySlug(
+          dto.speakerSlug,
+        );
+        if (resolved === null) {
+          this.logger.warn(
+            `Événement ${dto.type} rejeté : speakerSlug "${dto.speakerSlug}" inconnu ou non publié.`,
+          );
+          return;
+        }
+        speakerId = resolved;
+      }
+
+      let curatedListId: number | undefined;
+      if (dto.curatedListSlug) {
+        const resolved = await this.analytics.resolveCuratedListIdBySlug(
+          dto.curatedListSlug,
+        );
+        if (resolved === null) {
+          this.logger.warn(
+            `Événement ${dto.type} rejeté : curatedListSlug "${dto.curatedListSlug}" inconnu ou non publié.`,
+          );
+          return;
+        }
+        curatedListId = resolved;
+      }
+
+      await this.analytics.record({
         type: dto.type,
-        speakerId: dto.speakerId,
+        speakerId,
+        curatedListId,
+        // TOPIC_VIEW uniquement désormais (voir CreateAnalyticsEventDto) :
+        // slug opaque, jamais résolu, stocké tel quel dans le payload.
         payload: dto.slug ? { slug: dto.slug } : undefined,
         ip: req.ip ?? '',
         userAgent: req.headers['user-agent'],
         referrer: req.headers['referer'],
-      }),
-    );
+      });
+    });
     return { accepted: true };
   }
 }

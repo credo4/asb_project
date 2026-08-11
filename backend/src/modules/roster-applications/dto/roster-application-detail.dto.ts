@@ -6,6 +6,7 @@ import {
 } from './outputs/reference.dto';
 import { RosterApplicationEvaluationDto } from './outputs/evaluation.dto';
 import { RosterApplicationAttachmentDto } from './outputs/attachment.dto';
+import { EmailDeliverySummaryDto } from '../../../mail/dto/outputs/email-delivery-item.dto';
 
 // Projection COMPLÈTE réservée à l'admin (route déjà restreinte à
 // ADMIN/SUPER_ADMIN — voir RosterApplicationsController). Inclut l'intake
@@ -41,6 +42,12 @@ export class RosterApplicationDetailDto {
   aggregatedScore!: number | null;
 
   attachments!: RosterApplicationAttachmentDto[];
+
+  // §E (consolidation) — voir BookingRequestDetailDto pour le même champ :
+  // historique complet des tentatives d'envoi liées à cette candidature
+  // (accusé de réception, demande d'informations, refus, invitation...),
+  // trié du plus récent au plus ancien.
+  emailDeliveries!: EmailDeliverySummaryDto[];
 
   // Signale (ne bloque pas) — voir RosterApplicationListItemDto.
   hasDuplicateEmail!: boolean;

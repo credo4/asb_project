@@ -29,10 +29,12 @@ describe('Analytics API (e2e)', () => {
   const suffix = Date.now();
   const createdUserIds: number[] = [];
   const createdSpeakerIds: number[] = [];
+  const createdListIds: number[] = [];
 
   let adminToken: string;
   let speakerToken: string;
   let publishedSlug: string;
+  let publishedListSlug: string;
 
   async function signToken(user: User): Promise<string> {
     return jwtService.signAsync({
@@ -87,11 +89,28 @@ describe('Analytics API (e2e)', () => {
       },
     });
     createdSpeakerIds.push(speaker.id);
+
+    publishedListSlug = `e2e-analytics-list-${suffix}`;
+    const list = await prisma.curatedList.create({
+      data: {
+        title: `Analytics List ${suffix}`,
+        slug: publishedListSlug,
+        status: 'PUBLISHED',
+        publishedAt: new Date(),
+      },
+    });
+    createdListIds.push(list.id);
   });
 
   afterAll(async () => {
     await prisma.analyticsEvent.deleteMany({
       where: { speakerId: { in: createdSpeakerIds } },
+    });
+    await prisma.analyticsEvent.deleteMany({
+      where: { curatedListId: { in: createdListIds } },
+    });
+    await prisma.curatedList.deleteMany({
+      where: { id: { in: createdListIds } },
     });
     await prisma.speaker.deleteMany({
       where: { id: { in: createdSpeakerIds } },
@@ -165,12 +184,21 @@ describe('Analytics API (e2e)', () => {
   });
 
   describe('§B4 — résilience "fire and forget"', () => {
-    it("POST /public/analytics/events avec un speakerId inexistant (FK invalide) reste 202, l'erreur interne est avalée", async () => {
+    it("POST /public/analytics/events avec un speakerSlug inconnu reste 202, aucun événement n'est écrit", async () => {
+      const before = await prisma.analyticsEvent.count();
+
       const res = await request(app.getHttpServer())
         .post('/public/analytics/events')
-        .send({ type: 'CHECK_AVAILABILITY_CLICK', speakerId: 999999999 })
+        .send({
+          type: 'CHECK_AVAILABILITY_CLICK',
+          speakerSlug: `ce-slug-n-existe-pas-${suffix}`,
+        })
         .expect(202);
       expect(res.body).toEqual({ accepted: true });
+
+      await new Promise((resolve) => setTimeout(resolve, 200));
+      const after = await prisma.analyticsEvent.count();
+      expect(after).toBe(before);
     });
 
     it('une panne volontaire du service analytics ne fait pas échouer GET /public/speakers/:slug', async () => {
@@ -202,6 +230,81 @@ describe('Analytics API (e2e)', () => {
       } finally {
         await brokenApp.close();
       }
+    });
+  });
+
+  describe('Partie C (consolidation) — référencer par slug, résolu côté serveur', () => {
+    it('speakerSlug connu est résolu en id interne — la ligne créée référence le bon speaker', async () => {
+      await request(app.getHttpServer())
+        .post('/public/analytics/events')
+        .send({ type: 'CHECK_AVAILABILITY_CLICK', speakerSlug: publishedSlug })
+        .expect(202);
+      await new Promise((resolve) => setTimeout(resolve, 200));
+
+      const event = await prisma.analyticsEvent.findFirst({
+        where: {
+          type: 'CHECK_AVAILABILITY_CLICK',
+          speakerId: createdSpeakerIds[0],
+        },
+        orderBy: { createdAt: 'desc' },
+      });
+      expect(event).not.toBeNull();
+    });
+
+    it('curatedListSlug connu est résolu en id interne — la ligne créée référence la bonne liste', async () => {
+      await request(app.getHttpServer())
+        .post('/public/analytics/events')
+        .send({ type: 'CURATED_LIST_VIEW', curatedListSlug: publishedListSlug })
+        .expect(202);
+      await new Promise((resolve) => setTimeout(resolve, 200));
+
+      const event = await prisma.analyticsEvent.findFirst({
+        where: { type: 'CURATED_LIST_VIEW', curatedListId: createdListIds[0] },
+        orderBy: { createdAt: 'desc' },
+      });
+      expect(event).not.toBeNull();
+    });
+
+    it('curatedListSlug inconnu (ou liste DRAFT) reste 202, aucun événement écrit', async () => {
+      const draftList = await prisma.curatedList.create({
+        data: {
+          title: `Draft List ${suffix}`,
+          slug: `e2e-draft-list-${suffix}`,
+        },
+      });
+      createdListIds.push(draftList.id);
+
+      const before = await prisma.analyticsEvent.count();
+      const res = await request(app.getHttpServer())
+        .post('/public/analytics/events')
+        .send({ type: 'CURATED_LIST_VIEW', curatedListSlug: draftList.slug })
+        .expect(202);
+      expect(res.body).toEqual({ accepted: true });
+
+      await new Promise((resolve) => setTimeout(resolve, 200));
+      const after = await prisma.analyticsEvent.count();
+      expect(after).toBe(before);
+    });
+
+    it('un id numérique direct (speakerId) est rejeté (400) — la surface publique ne connaît QUE des slugs', async () => {
+      const res = await request(app.getHttpServer())
+        .post('/public/analytics/events')
+        .send({
+          type: 'CHECK_AVAILABILITY_CLICK',
+          speakerId: createdSpeakerIds[0],
+        })
+        .expect(400);
+      expect((res.body as ErrorResponseBody).statusCode).toBe(400);
+    });
+
+    it("la réponse ne contient jamais d'identifiant interne, dans aucun des deux sens", async () => {
+      const res = await request(app.getHttpServer())
+        .post('/public/analytics/events')
+        .send({ type: 'CHECK_AVAILABILITY_CLICK', speakerSlug: publishedSlug })
+        .expect(202);
+      // Requête : uniquement un slug (voir ci-dessus). Réponse : forme fixe,
+      // jamais l'id résolu en interne.
+      expect(res.body).toEqual({ accepted: true });
     });
   });
 

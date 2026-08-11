@@ -122,6 +122,7 @@ export class AuthService {
         user.email,
         user.firstName,
         verificationUrl,
+        user.id,
       );
     } catch (error) {
       this.logger.error(
@@ -186,6 +187,7 @@ export class AuthService {
         user.email,
         user.firstName,
         resetUrl,
+        user.id,
       );
     } catch (error) {
       this.logger.error(

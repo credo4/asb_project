@@ -333,6 +333,101 @@ describe('Public speakers API — invariant public/privé (e2e)', () => {
     });
   });
 
+  describe('GET /public/speakers — tri (Partie A, consolidation)', () => {
+    let sortA: string;
+    let sortB: string;
+    const sortSpeakerIds: number[] = [];
+
+    beforeAll(async () => {
+      const suffix = Date.now();
+      sortA = `e2e-sort-aaron-${suffix}`;
+      sortB = `e2e-sort-zoe-${suffix}`;
+
+      const early = await prisma.speaker.create({
+        data: {
+          firstName: 'Aaron',
+          lastName: 'Zolo',
+          slug: sortA,
+          status: SpeakerStatus.PUBLISHED,
+          isVisible: true,
+          publishedAt: new Date('2020-01-01T00:00:00Z'),
+        },
+      });
+      const late = await prisma.speaker.create({
+        data: {
+          firstName: 'Zoe',
+          lastName: 'Aabel',
+          slug: sortB,
+          status: SpeakerStatus.PUBLISHED,
+          isVisible: true,
+          publishedAt: new Date('2024-01-01T00:00:00Z'),
+        },
+      });
+      sortSpeakerIds.push(early.id, late.id);
+    });
+
+    afterAll(async () => {
+      await prisma.speaker.deleteMany({
+        where: { id: { in: sortSpeakerIds } },
+      });
+    });
+
+    it('sortBy=name, sortOrder=asc trie par nom de famille croissant', async () => {
+      const res = await request(app.getHttpServer())
+        .get('/public/speakers')
+        .query({ sortBy: 'name', sortOrder: 'asc', perPage: 50 })
+        .expect(200);
+
+      const slugs = (res.body as ListResponseBody).data.map((s) => s.slug);
+      const indexAabel = slugs.indexOf(sortB); // lastName "Aabel"
+      const indexZolo = slugs.indexOf(sortA); // lastName "Zolo"
+      expect(indexAabel).toBeGreaterThanOrEqual(0);
+      expect(indexZolo).toBeGreaterThanOrEqual(0);
+      expect(indexAabel).toBeLessThan(indexZolo);
+    });
+
+    it('sortBy=publishedAt (défaut desc) renvoie le plus récent en premier', async () => {
+      const res = await request(app.getHttpServer())
+        .get('/public/speakers')
+        .query({ sortBy: 'publishedAt', perPage: 50 })
+        .expect(200);
+
+      const slugs = (res.body as ListResponseBody).data.map((s) => s.slug);
+      const indexLate = slugs.indexOf(sortB); // publishedAt 2024
+      const indexEarly = slugs.indexOf(sortA); // publishedAt 2020
+      expect(indexLate).toBeLessThan(indexEarly);
+    });
+
+    it("sans sortBy, l'ordre par défaut (isTopRequested/isFeaturedHome/nom) est inchangé", async () => {
+      // Non-régression : l'appel nu continue de fonctionner exactement comme
+      // avant l'introduction du tri (aucune valeur par défaut imposée).
+      await request(app.getHttpServer())
+        .get('/public/speakers')
+        .query({ perPage: 50 })
+        .expect(200);
+    });
+
+    it("rejette (400) une valeur de sortBy hors de l'allow-list — notamment un champ privé", async () => {
+      // "recommendedFee" n'est PAS dans PublicSpeakerSortBy : même s'il
+      // existait comme nom de colonne réel côté admin (speaker_pricing),
+      // l'enum fermé le rend structurellement inaccessible ici — jamais
+      // moyen de trier par tarif, donc jamais moyen de le deviner par le
+      // classement des résultats.
+      const res = await request(app.getHttpServer())
+        .get('/public/speakers')
+        .query({ sortBy: 'recommendedFee', perPage: 50 })
+        .expect(400);
+      expect((res.body as ErrorResponseBody).statusCode).toBe(400);
+    });
+
+    it('rejette (400) un sortOrder hors de asc/desc', async () => {
+      await request(app.getHttpServer())
+        .get('/public/speakers')
+        .query({ sortBy: 'name', sortOrder: 'banana', perPage: 50 })
+        .expect(400);
+    });
+  });
+
   describe('GET /public/pillars, /formats, /languages, /countries', () => {
     it('ne nécessitent aucune authentification', async () => {
       await request(app.getHttpServer()).get('/public/pillars').expect(200);

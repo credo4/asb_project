@@ -1,6 +1,6 @@
 import { INestApplication, ValidationPipe } from '@nestjs/common';
 import { DocumentBuilder, OpenAPIObject, SwaggerModule } from '@nestjs/swagger';
-import type { Express } from 'express';
+import type { Express, NextFunction, Request, Response } from 'express';
 import helmet from 'helmet';
 import { PublicModule } from './modules/public/public.module';
 import { AllExceptionsFilter } from './common/filters/http-exception.filter';
@@ -48,6 +48,21 @@ export function configureApp(app: INestApplication): void {
 
   app.use(helmet());
 
+  // Consolidation, Partie D1 — Helmet pose `Cross-Origin-Resource-Policy:
+  // same-origin` par défaut (ci-dessus). Sans exception, le NAVIGATEUR du
+  // site public (hébergé sur un autre domaine) bloquerait le chargement des
+  // photos de speakers servies depuis /uploads dans une balise <img> — un
+  // CORP restrictif s'applique même sans CORS, à la simple LECTURE d'une
+  // ressource cross-origin. Relâché à `cross-origin` UNIQUEMENT pour ce
+  // préfixe de route (le middleware ci-dessous s'exécute APRÈS le helmet()
+  // général ci-dessus et ne réécrit QUE cet en-tête, pour les seules
+  // requêtes sous /uploads) — jamais globalement : le reste de l'app garde
+  // la protection par défaut de Helmet.
+  app.use(
+    '/uploads',
+    helmet.crossOriginResourcePolicy({ policy: 'cross-origin' }),
+  );
+
   // CORS en allow-list, combinant trois sources : FRONTEND_URL (back-office /
   // espace speaker, avec credentials pour les cookies/sessions),
   // PUBLIC_SITE_ORIGINS (le site public, liste séparée par des virgules —
@@ -61,6 +76,26 @@ export function configureApp(app: INestApplication): void {
     ...parseOrigins(process.env.PUBLIC_SITE_ORIGINS),
     ...parseOrigins(process.env.APP_URL),
   ];
+
+  // Consolidation, Partie D2 — `Vary: Origin` DOIT être présent sur TOUTE
+  // réponse dont le contenu (les en-têtes Access-Control-Allow-*, en
+  // pratique) dépend de l'Origin de la requête — sinon un cache intermédiaire
+  // (le CDN Hostinger placé devant l'app, visible via l'en-tête
+  // x-hcdn-cache-status) pourrait mettre en cache la réponse obtenue pour
+  // UNE origine et la resservir telle quelle à une AUTRE origine. Le paquet
+  // `cors` (utilisé par `app.enableCors` ci-dessous) ajoute bien ce Vary
+  // quand l'origine est AUTORISÉE, mais PAS quand elle est REJETÉE (vérifié
+  // empiriquement) — un trou : la réponse "sans en-têtes CORS" (cas rejeté)
+  // pourrait alors être mise en cache et resservie à une origine qui, elle,
+  // aurait dû être autorisée. Middleware dédié, posé AVANT `enableCors`,
+  // qui garantit l'en-tête dans les DEUX cas — `res.setHeader` avant que
+  // `cors` n'intervienne (qui fusionne plutôt que dupliquer s'il l'ajoute
+  // aussi lui-même pour le cas autorisé, via le paquet `vary`).
+  app.use((_req: Request, res: Response, next: NextFunction) => {
+    res.setHeader('Vary', 'Origin');
+    next();
+  });
+
   app.enableCors({
     origin: (
       origin: string | undefined,

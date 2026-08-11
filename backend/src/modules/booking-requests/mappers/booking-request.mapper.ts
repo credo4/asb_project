@@ -13,6 +13,7 @@ import {
   RequestedSpeakerRefDto,
   SiblingBookingRequestRefDto,
 } from '../dto/outputs/reference.dto';
+import { EmailDeliverySummaryDto } from '../../../mail/dto/outputs/email-delivery-item.dto';
 
 function toAdminRef(
   admin: BookingRequestRow['assignedAdmin'],
@@ -152,6 +153,7 @@ export function toDetailDto(
       createdAt: Date;
     }[];
   },
+  emailDeliveries: EmailDeliverySummaryDto[],
 ): BookingRequestDetailDto {
   return {
     id: row.id,
@@ -202,6 +204,7 @@ export function toDetailDto(
 
     notes: row.notes.map(toNoteDto),
     attachments: row.attachments.map(toAttachmentDto),
+    emailDeliveries,
 
     siblingRequestsFromContact: siblingRequests.fromContact.map(toSiblingRef),
     siblingRequestsFromOrganization:

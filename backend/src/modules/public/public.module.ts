@@ -9,13 +9,16 @@ import { PublicTaxonomiesService } from './taxonomies/public-taxonomies.service'
 import { PublicBookingRequestsController } from './booking-requests/public-booking-requests.controller';
 import { PublicRosterApplicationsController } from './roster-applications/public-roster-applications.controller';
 import { PublicAnalyticsController } from './analytics/public-analytics.controller';
+import { PublicCuratedListsController } from './curated-lists/public-curated-lists.controller';
+import { PublicCuratedListsService } from './curated-lists/public-curated-lists.service';
 
 @Module({
   // Les endpoints d'écriture publics délèguent aux services des modules
   // admin (BookingRequestsService/RosterApplicationsService/AnalyticsService)
   // plutôt que de dupliquer la logique métier — contrairement aux DTOs de
-  // LECTURE (speakers/taxonomies), qui restent volontairement dupliqués pour
-  // ne jamais coupler la projection publique au module admin (cf. CLAUDE.md §5).
+  // LECTURE (speakers/taxonomies/curated-lists), qui restent volontairement
+  // dupliqués pour ne jamais coupler la projection publique au module admin
+  // (cf. CLAUDE.md §5).
   imports: [BookingRequestsModule, RosterApplicationsModule, AnalyticsModule],
   controllers: [
     PublicSpeakersController,
@@ -23,7 +26,12 @@ import { PublicAnalyticsController } from './analytics/public-analytics.controll
     PublicBookingRequestsController,
     PublicRosterApplicationsController,
     PublicAnalyticsController,
+    PublicCuratedListsController,
   ],
-  providers: [PublicSpeakersService, PublicTaxonomiesService],
+  providers: [
+    PublicSpeakersService,
+    PublicTaxonomiesService,
+    PublicCuratedListsService,
+  ],
 })
 export class PublicModule {}

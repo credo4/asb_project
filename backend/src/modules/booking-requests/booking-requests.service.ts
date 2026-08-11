@@ -14,6 +14,7 @@ import {
 import { PrismaService } from '../../prisma/prisma.service';
 import { ActivityLogService } from '../../activity-log/activity-log.service';
 import { MailService } from '../../mail/mail.service';
+import { EmailDeliveriesService } from '../../mail/email-deliveries.service';
 import { ClientLinkingService } from '../clients/client-linking.service';
 import { AuthenticatedUser } from '../../common/types/authenticated-user.interface';
 import {
@@ -75,6 +76,7 @@ export class BookingRequestsService {
     private readonly prisma: PrismaService,
     private readonly activityLog: ActivityLogService,
     private readonly mailService: MailService,
+    private readonly emailDeliveries: EmailDeliveriesService,
     private readonly config: ConfigService,
     private readonly clientLinking: ClientLinkingService,
   ) {}
@@ -381,6 +383,7 @@ export class BookingRequestsService {
           // Route de back-office supposée (pas encore scaffoldé — cf.
           // CLAUDE.md §2) : à ajuster une fois le routing réel connu.
           backOfficeUrl: `${frontendUrl ?? ''}/booking-requests/${bookingRequest.id}`,
+          relatedEntityId: bookingRequest.id,
         });
       } catch (error) {
         this.logger.error(
@@ -400,6 +403,7 @@ export class BookingRequestsService {
         fullName: bookingRequest.fullName,
         reference: bookingRequest.reference,
         responseDays: RESPONSE_SLA_BUSINESS_DAYS[bookingRequest.serviceType],
+        relatedEntityId: bookingRequest.id,
       });
     } catch (error) {
       this.logger.error(
@@ -424,6 +428,7 @@ export class BookingRequestsService {
         fullName: bookingRequest.fullName,
         organization: bookingRequest.organization ?? '',
         backOfficeUrl: `${frontendUrl ?? ''}/booking-requests/${bookingRequest.id}`,
+        relatedEntityId: bookingRequest.id,
       });
     } catch (error) {
       this.logger.error(
@@ -475,7 +480,7 @@ export class BookingRequestsService {
     // organisation, EXCLUT la demande courante. Pas de relation directe côté
     // Prisma (ce sont d'AUTRES lignes de la même table) — deux requêtes
     // légères, exécutées en parallèle.
-    const [fromContact, fromOrganization] = await Promise.all([
+    const [fromContact, fromOrganization, emailDeliveries] = await Promise.all([
       row.contactId
         ? this.prisma.bookingRequest.findMany({
             where: { contactId: row.contactId, id: { not: id } },
@@ -490,9 +495,12 @@ export class BookingRequestsService {
             select: SIBLING_SELECT,
           })
         : Promise.resolve([]),
+      // §E (consolidation) — voir EmailDeliverySummaryDto pour le choix de
+      // renvoyer l'historique complet plutôt que le seul dernier envoi.
+      this.emailDeliveries.findForEntity('BookingRequest', id),
     ]);
 
-    return toDetailDto(row, { fromContact, fromOrganization });
+    return toDetailDto(row, { fromContact, fromOrganization }, emailDeliveries);
   }
 
   // GET /admin/booking-requests/:id/history (§2.7) — flux unique trié,

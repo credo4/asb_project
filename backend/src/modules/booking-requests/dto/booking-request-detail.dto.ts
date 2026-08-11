@@ -14,6 +14,7 @@ import {
 } from './outputs/reference.dto';
 import { BookingRequestNoteDto } from './outputs/booking-request-note.dto';
 import { BookingRequestAttachmentDto } from './outputs/booking-request-attachment.dto';
+import { EmailDeliverySummaryDto } from '../../../mail/dto/outputs/email-delivery-item.dto';
 
 // Projection COMPLÈTE réservée à l'admin (route déjà restreinte à
 // ADMIN/SUPER_ADMIN — voir BookingRequestsController).
@@ -70,6 +71,12 @@ export class BookingRequestDetailDto {
 
   notes!: BookingRequestNoteDto[];
   attachments!: BookingRequestAttachmentDto[];
+  // §E (consolidation) — historique des tentatives d'envoi liées à cette
+  // demande (notification interne, accusé de réception, assignation,
+  // rappels), trié du plus récent au plus ancien : emailDeliveries[0] EST
+  // "le statut du dernier envoi". Permet à l'équipe de voir directement
+  // "accusé de réception non envoyé" sans creuser les logs serveur.
+  emailDeliveries!: EmailDeliverySummaryDto[];
 
   // §6.2 — historique des autres demandes du même contact/de la même
   // organisation (exclut la demande courante).
