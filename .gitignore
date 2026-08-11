@@ -1,0 +1,66 @@
+# Monorepo : backend/, backoffice/, speaker-portal/
+# Ces patterns (sans "/" en tête) s'appliquent à n'importe quelle profondeur.
+
+# Dépendances
+node_modules/
+
+# Build
+dist/
+build/
+.vite/
+*.tsbuildinfo
+
+# Environnement (jamais de secret committé) — tout .env.* sauf .env.example
+.env
+.env.*
+!.env.example
+
+# Prisma (client généré + éventuelle DB locale + artefacts de compilation
+# égarés — prisma/ ne devrait contenir que .ts/.sql/.toml)
+**/generated/prisma/
+prisma/*.db
+prisma/*.js
+prisma/*.js.map
+prisma/*.d.ts
+
+# Même égarement possible pour scripts/ (utilitaires .ts exécutés via
+# ts-node) — ne devrait contenir que des .ts.
+scripts/*.js
+scripts/*.js.map
+scripts/*.d.ts
+
+# Stockage fichiers (médias uploadés) — on garde uniquement la structure de
+# dossiers (public/, private/) via .gitkeep, jamais les fichiers réels.
+# Ancré à "backend/storage/" (dossier RUNTIME des uploads) et non "**/storage/**" :
+# ce dernier matchait aussi backend/src/storage/ (le MODULE NestJS lui-même,
+# du code source) et l'excluait silencieusement du dépôt — bug qui a cassé le
+# build lors d'un push "snapshot propre" (orphan branch) vers credo4/asb_project,
+# où l'arbre est reconstruit à partir de zéro en respectant ce .gitignore.
+backend/storage/**
+!backend/storage/**/
+!backend/storage/public/.gitkeep
+!backend/storage/private/.gitkeep
+
+# Fichier perso (feuille de route personnelle) — reste en local uniquement,
+# jamais poussé sur le dépôt distant.
+CLAUDE.md
+
+# Export statique de la doc Swagger (généré via `npm run docs:export`) :
+# on garde index.html (source) mais pas le JSON, régénérable à la demande
+# et qui se périmerait silencieusement s'il était committé.
+**/swagger-static/openapi.json
+
+# Dumps de sauvegarde DB (contiennent des données de prod — jamais commités)
+backups/
+
+# Logs
+*.log
+
+# IDE / OS
+.vscode/*
+!.vscode/extensions.json
+.DS_Store
+Thumbs.db
+
+# Tests
+coverage/

@@ -1,0 +1,1253 @@
+// =============================================================================
+// Africa Speakers Bureau — Backend (NestJS + Prisma + MySQL)
+// Schéma Prisma — Périmètre PHASE 0 & PHASE 1
+// -----------------------------------------------------------------------------
+// Phase 0  : fondations (auth/rôles, taxonomies, coquille).
+// Phase 1  : boucle publique (speakers, frontière public/privé, API publique
+//            filtrée, ingestion des formulaires -> demandes clients).
+//
+// Convention : identifiants EN anglais dans le code/DB, commentaires en FR.
+// Tables en snake_case via @@map ; colonnes en snake_case via @map.
+// Les modèles/champs marqués « PRIVÉ » ne doivent JAMAIS transiter par l'API
+// publique (voir l'invariant dans CLAUDE.md).
+// =============================================================================
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "mysql"
+  url      = env("DATABASE_URL")
+}
+
+// =============================================================================
+// ENUMS
+// =============================================================================
+
+enum Role {
+  SUPER_ADMIN
+  ADMIN
+  SPEAKER
+}
+
+enum UserStatus {
+  ACTIVE
+  INVITED // compte créé, mot de passe pas encore défini (invitation speaker)
+  SUSPENDED
+  DISABLED
+}
+
+// Cycle de vie d'un speaker (cf. cahier des charges §4)
+enum SpeakerStatus {
+  DRAFT
+  INCOMPLETE
+  PENDING_VALIDATION
+  CHANGES_REQUESTED
+  APPROVED
+  PUBLISHED
+  UNPUBLISHED
+  SUSPENDED
+  ARCHIVED
+  APPLICATION_REJECTED
+}
+
+// Niveau tarifaire INDICATIF affiché publiquement ($ / $$ / $$$)
+enum FeeTierPublic {
+  TIER_1
+  TIER_2
+  TIER_3
+}
+
+enum LanguageProficiency {
+  NATIVE
+  FLUENT
+  PROFESSIONAL
+  INTERMEDIATE
+}
+
+// Les 5 formulaires du site public
+enum ServiceType {
+  CONFERENCE
+  MASTERCLASS
+  WEBINAR
+  ADVISORY
+  ONE_TO_ONE
+}
+
+// Cycle de vie d'une demande client (cf. §6)
+// 13 statuts (cf. cahier des charges §6.3). Renommages Phase 3b (NEGOTIATION
+// -> NEGOTIATING, REJECTED -> DECLINED) : sûrs sans backfill, aucune ligne en
+// production au moment de cette migration (voir migration add_booking_request_workflow).
+// CANCELLED/DECLINED/CLOSED sont TERMINAUX (voir
+// booking-request-status-transitions.util.ts) : la matrice de transitions ne
+// permet d'en sortir que via l'action dédiée "reopen" (SUPER_ADMIN uniquement,
+// journalisée) — jamais via le endpoint de transition standard.
+enum BookingStatus {
+  NEW
+  TO_QUALIFY
+  UNDER_ANALYSIS
+  SELECTING_SPEAKERS
+  PROPOSAL_SENT
+  AWAITING_CLIENT
+  AWAITING_SPEAKER
+  NEGOTIATING
+  CONFIRMED
+  CONTRACT_IN_PREPARATION
+  CANCELLED
+  DECLINED
+  CLOSED
+}
+
+enum BookingPriority {
+  LOW
+  NORMAL
+  HIGH
+  URGENT
+}
+
+// Origine d'une demande (Phase 3b, §3) — remplace l'ancien champ texte libre
+// `source` (valeur unique 'public_website' jusqu'ici). PUBLIC_FORM reste le
+// défaut pour ne rien changer au chemin d'ingestion existant.
+enum BookingRequestSource {
+  PUBLIC_FORM
+  MANUAL_ENTRY
+  REFERRAL
+  OTHER
+}
+
+// Motif spécifique au formulaire One-to-One
+enum OneToOnePurpose {
+  ASPIRING_SPEAKER
+  PROSPECTIVE_CLIENT
+  OTHER
+}
+
+// Cycle de vie d'une candidature speaker (cf. §5, Phase 3 étape 3c).
+// Renommage Phase 3c : INTERVIEWED -> INTERVIEW_DONE (voir migration
+// add_roster_application_conversion — sûr sans backfill, cf. vérification
+// du nombre de lignes en production avant cette migration).
+// CONVERTED n'est atteignable QUE par l'action de conversion dédiée
+// (RosterApplicationsService#convert), jamais par un changement de statut
+// manuel — voir roster-application-status-transitions.util.ts.
+// REJECTED/ARCHIVED sont TERMINAUX : réouverture SUPER_ADMIN uniquement,
+// journalisée (même pattern que BookingStatus, §3b).
+enum ApplicationStatus {
+  NEW
+  UNDER_REVIEW
+  INFO_REQUESTED
+  INTERVIEW_TO_SCHEDULE
+  INTERVIEW_DONE
+  APPROVED
+  REJECTED
+  CONVERTED
+  ARCHIVED
+}
+
+enum PillarStatus {
+  PUBLISHED
+  HIDDEN
+}
+
+// Cycle de vie d'une révision de profil speaker (cf. Phase 2, §2a)
+enum RevisionStatus {
+  DRAFT
+  SUBMITTED
+  APPROVED
+  CHANGES_REQUESTED
+  REJECTED
+  WITHDRAWN
+}
+
+// Galerie de médias publics du speaker — cf. Phase 2, consolidation Partie A.
+// Table UNIQUE (a fusionné Phase 1 "speaker_media" admin-curée + Phase 2b
+// "speaker_media_assets" en libre-service — voir schema.prisma plus bas,
+// section GALERIE SPEAKER, et migration merge_speaker_media_into_assets).
+// Réutilise le nom "MediaType" (l'ancien enum à 11 valeurs, propre à Phase 1,
+// n'existe plus).
+enum MediaType {
+  PHOTO
+  VIDEO // lien d'embed externe (YouTube/Vimeo), jamais un fichier
+  PRESS_KIT
+}
+
+// Tout média (créé par un admin OU uploadé par un speaker) passe par ce
+// statut avant d'être visible publiquement : un admin l'écrit directement en
+// APPROVED (il ne s'auto-valide pas via une file de revue), un speaker en
+// PENDING_REVIEW jusqu'à décision admin.
+enum MediaReviewStatus {
+  PENDING_REVIEW
+  APPROVED
+  REJECTED
+}
+
+// Documents privés (CV, attestations) — cf. Phase 2, §2c. Types sensibles
+// (pièce d'identité, coordonnées bancaires) volontairement PAS inclus ici :
+// viendront en v2 avec chiffrement au repos (cf. CLAUDE.md §8).
+enum SpeakerDocumentType {
+  CV
+  CERTIFICATE
+  OTHER
+}
+
+// Disponibilités (Phase 2, §2d) — modèle "disponible par défaut, sauf
+// exception" : une période dit soit "je suis dispo sur ce créneau" (rare,
+// surtout utile pour lever un doute), soit "je NE suis PAS dispo" (le cas
+// courant : congés, autre engagement...). Voir SpeakerAvailabilityPeriod.
+enum AvailabilityPeriodType {
+  AVAILABLE
+  UNAVAILABLE
+}
+
+// Portée géographique de déplacement d'un speaker (cf. §17).
+enum TravelScope {
+  WORLDWIDE
+  SELECTED_COUNTRIES
+  NO_TRAVEL
+}
+
+// Phase 3, étape 3a — traçage brut (cf. §14.1/§14.3). Volontairement plat :
+// aucune agrégation dans ce type, la Phase 4 s'en chargera à la lecture.
+enum AnalyticsEventType {
+  PROFILE_VIEW
+  SEARCH
+  CHECK_AVAILABILITY_CLICK
+  CURATED_LIST_VIEW
+  TOPIC_VIEW
+}
+
+// =============================================================================
+// AUTH & UTILISATEURS
+// =============================================================================
+
+model User {
+  id              Int        @id @default(autoincrement())
+  email           String     @unique @db.VarChar(191)
+  passwordHash    String?    @map("password_hash") @db.VarChar(255) // null tant que INVITED
+  role            Role       @default(ADMIN)
+  status          UserStatus @default(ACTIVE)
+  firstName       String?    @map("first_name") @db.VarChar(120)
+  lastName        String?    @map("last_name") @db.VarChar(120)
+  emailVerifiedAt DateTime?  @map("email_verified_at")
+
+  // Réservé v2 (double authentification) — présent pour éviter une migration plus tard
+  twoFactorSecret  String? @map("two_factor_secret") @db.VarChar(255)
+  twoFactorEnabled Boolean @default(false) @map("two_factor_enabled")
+
+  // Conditions de collaboration (Phase 3c, §4.4) — acceptées à l'acceptation
+  // de l'invitation, en même temps que la définition du mot de passe.
+  // Obligatoire à cette étape (voir RosterApplicationsService#acceptInvitation) :
+  // sans elles, la définition du mot de passe échoue.
+  acceptedTermsAt      DateTime? @map("accepted_terms_at")
+  acceptedTermsVersion String?   @map("accepted_terms_version") @db.VarChar(60)
+
+  lastLoginAt DateTime? @map("last_login_at")
+  createdAt   DateTime  @default(now()) @map("created_at")
+  updatedAt   DateTime  @updatedAt @map("updated_at")
+
+  // Relations
+  speakerProfile               Speaker?                      @relation("SpeakerAccount")
+  assignedBookings             BookingRequest[]              @relation("BookingAssignee")
+  assignedApplications         RosterApplication[]           @relation("ApplicationAssignee")
+  // Candidature d'origine si ce compte est né d'une conversion (Phase 3c) —
+  // relation 1:1 optionnelle, opposée à RosterApplication.convertedUserId.
+  convertedFromApplication     RosterApplication?            @relation("ApplicationConvertedUser")
+  rosterApplicationEvaluations RosterApplicationEvaluation[] @relation("ApplicationEvaluator")
+  uploadedRosterAttachments    RosterApplicationAttachment[] @relation("RosterApplicationAttachmentUploader")
+  reviewedRevisions            SpeakerRevision[]             @relation("RevisionReviewer")
+  reviewedMedia                SpeakerMedia[]                @relation("MediaReviewer")
+  assignedOrganizations        Organization[]                @relation("OrganizationAssignee")
+  bookingRequestNotes          BookingRequestNote[]          @relation("BookingRequestNoteAuthor")
+  uploadedAttachments          BookingRequestAttachment[]    @relation("BookingRequestAttachmentUploader")
+  assignedReminders            Reminder[]                    @relation("ReminderAssignee")
+  createdReminders             Reminder[]                    @relation("ReminderCreator")
+  activityLogs                 ActivityLog[]
+  emailVerificationTokens      EmailVerificationToken[]
+  passwordResetTokens          PasswordResetToken[]
+  invitationTokens             InvitationToken[]
+  refreshTokens                RefreshToken[]
+
+  @@index([role])
+  @@index([status])
+  @@map("users")
+}
+
+// Un token émis = une ligne. Permet une vraie rotation : on marque l'ancien
+// `revokedAt` au lieu de simplement laisser le JWT expirer naturellement.
+// On stocke un hash (sha256), jamais le token en clair.
+model RefreshToken {
+  id        Int       @id @default(autoincrement())
+  userId    Int       @map("user_id")
+  tokenHash String    @unique @map("token_hash") @db.VarChar(64)
+  expiresAt DateTime  @map("expires_at")
+  revokedAt DateTime? @map("revoked_at")
+  createdAt DateTime  @default(now()) @map("created_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("refresh_tokens")
+}
+
+model EmailVerificationToken {
+  id        Int       @id @default(autoincrement())
+  userId    Int       @map("user_id")
+  token     String    @unique @db.VarChar(255)
+  expiresAt DateTime  @map("expires_at")
+  usedAt    DateTime? @map("used_at")
+  createdAt DateTime  @default(now()) @map("created_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("email_verification_tokens")
+}
+
+model PasswordResetToken {
+  id        Int       @id @default(autoincrement())
+  userId    Int       @map("user_id")
+  token     String    @unique @db.VarChar(255)
+  expiresAt DateTime  @map("expires_at")
+  usedAt    DateTime? @map("used_at")
+  createdAt DateTime  @default(now()) @map("created_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("password_reset_tokens")
+}
+
+// =============================================================================
+// TAXONOMIES (données de référence, à seeder en Phase 0)
+// =============================================================================
+
+// Les 6 piliers du projet. Contenu éditorial éditable = géré ici (base du CMS Phase 4).
+model Pillar {
+  id               Int          @id @default(autoincrement())
+  name             String       @db.VarChar(160)
+  slug             String       @unique @db.VarChar(160)
+  color            String?      @db.VarChar(20)
+  imageUrl         String?      @map("image_url") @db.VarChar(500)
+  intro            String?      @db.Text // "Why it matters"
+  problemStatement String?      @map("problem_statement") @db.Text
+  valueProposition String?      @map("value_proposition") @db.Text // "What our speakers bring"
+  displayOrder     Int          @default(0) @map("display_order")
+  status           PillarStatus @default(PUBLISHED)
+  createdAt        DateTime     @default(now()) @map("created_at")
+  updatedAt        DateTime     @updatedAt @map("updated_at")
+
+  themes         Theme[]
+  speakerPillars SpeakerPillar[]
+
+  @@index([status])
+  @@map("pillars")
+}
+
+// Sous-thématiques rattachées à un pilier
+model Theme {
+  id           Int      @id @default(autoincrement())
+  pillarId     Int      @map("pillar_id")
+  name         String   @db.VarChar(160)
+  slug         String   @db.VarChar(160)
+  displayOrder Int      @default(0) @map("display_order")
+  createdAt    DateTime @default(now()) @map("created_at")
+  updatedAt    DateTime @updatedAt @map("updated_at")
+
+  pillar        Pillar         @relation(fields: [pillarId], references: [id], onDelete: Cascade)
+  speakerThemes SpeakerTheme[]
+
+  @@unique([pillarId, slug])
+  @@index([pillarId])
+  @@map("themes")
+}
+
+// Formats d'intervention (keynote, panéliste, etc.)
+model Format {
+  id           Int      @id @default(autoincrement())
+  name         String   @db.VarChar(120)
+  slug         String   @unique @db.VarChar(120)
+  displayOrder Int      @default(0) @map("display_order")
+  createdAt    DateTime @default(now()) @map("created_at")
+
+  speakerFormats SpeakerFormat[]
+
+  @@map("formats")
+}
+
+model Language {
+  id           Int    @id @default(autoincrement())
+  name         String @db.VarChar(100)
+  code         String @unique @db.VarChar(10) // ex : "en", "fr", "pt"
+  displayOrder Int    @default(0) @map("display_order")
+
+  speakerLanguages SpeakerLanguage[]
+
+  @@map("languages")
+}
+
+// Liste PLATE des pays (choix validé)
+model Country {
+  id           Int     @id @default(autoincrement())
+  name         String  @db.VarChar(120)
+  iso2         String  @unique @db.VarChar(2)
+  iso3         String? @db.VarChar(3)
+  isActive     Boolean @default(true) @map("is_active")
+  displayOrder Int     @default(0) @map("display_order")
+
+  residents                 Speaker[]                        @relation("SpeakerResidence")
+  nationals                 Speaker[]                        @relation("SpeakerNationality")
+  engagements               SignatureEngagement[]
+  travelPreferenceCountries SpeakerTravelPreferenceCountry[]
+  organizations             Organization[]
+  contacts                  Contact[]
+
+  @@map("countries")
+}
+
+// =============================================================================
+// SPEAKER — entité centrale
+// -----------------------------------------------------------------------------
+// La table `speakers` est la source de vérité (version approuvée/live).
+// Les données PRIVÉES (tarifs) sont isolées dans `speaker_pricing`.
+// Le workflow "édition speaker -> revue admin" (Phase 2) s'ajoutera via une
+// table `speaker_revisions` — non incluse ici pour rester sur le périmètre 0-1.
+// =============================================================================
+
+model Speaker {
+  id     Int  @id @default(autoincrement())
+  userId Int? @unique @map("user_id") // lien vers le compte de connexion (peut être null si créé par l'admin)
+
+  // --- Informations générales (PARTIELLEMENT privées : email/téléphone = privés) ---
+  civility             String? @db.VarChar(20)
+  firstName            String  @map("first_name") @db.VarChar(120)
+  lastName             String  @map("last_name") @db.VarChar(120)
+  publicName           String? @map("public_name") @db.VarChar(200) // nom affiché publiquement
+  email                String? @db.VarChar(191) // PRIVÉ
+  phone                String? @db.VarChar(50) // PRIVÉ
+  countryId            Int?    @map("country_id") // pays de résidence
+  nationalityCountryId Int?    @map("nationality_country_id")
+  city                 String? @db.VarChar(120)
+  timezone             String? @db.VarChar(60)
+
+  // --- Présentation publique ---
+  profilePhotoUrl     String? @map("profile_photo_url") @db.VarChar(500)
+  coverPhotoUrl       String? @map("cover_photo_url") @db.VarChar(500)
+  professionalTitle   String? @map("professional_title") @db.VarChar(200)
+  currentOrganization String? @map("current_organization") @db.VarChar(200)
+  currentPosition     String? @map("current_position") @db.VarChar(200)
+  websiteUrl          String? @map("website_url") @db.VarChar(500)
+  linkedinUrl         String? @map("linkedin_url") @db.VarChar(500)
+  socialLinks         Json?   @map("social_links") // { twitter, instagram, ... }
+
+  shortBio         String? @map("short_bio") @db.Text // pour les cartes
+  fullBio          String? @map("full_bio") @db.Text
+  quote            String? @db.Text
+  expertiseSummary String? @map("expertise_summary") @db.Text
+  valueProposition String? @map("value_proposition") @db.Text
+  careerPath       String? @map("career_path") @db.Text
+  keyAchievements  String? @map("key_achievements") @db.Text
+  awards           String? @db.Text
+
+  // Niveau tarifaire INDICATIF public (le détail est dans speaker_pricing = privé)
+  feeTierPublic FeeTierPublic? @map("fee_tier_public")
+
+  // --- État & visibilité ---
+  status          SpeakerStatus @default(DRAFT)
+  slug            String?       @unique @db.VarChar(200)
+  isVisible       Boolean       @default(false) @map("is_visible")
+  isFeaturedHome  Boolean       @default(false) @map("is_featured_home") // mis en avant page d'accueil
+  isTopRequested  Boolean       @default(false) @map("is_top_requested") // "Top Requested Speakers" (flag manuel)
+  showBudget      Boolean       @default(false) @map("show_budget") // afficher le tier indicatif
+  showLocation    Boolean       @default(true) @map("show_location")
+  allowIndexing   Boolean       @default(true) @map("allow_indexing") // robots / SEO
+  completionScore Int           @default(0) @map("completion_score") // % de complétion du profil
+
+  publishedAt DateTime? @map("published_at")
+  createdAt   DateTime  @default(now()) @map("created_at")
+  updatedAt   DateTime  @updatedAt @map("updated_at")
+  deletedAt   DateTime? @map("deleted_at") // soft delete
+
+  // Relations
+  user        User?    @relation("SpeakerAccount", fields: [userId], references: [id], onDelete: SetNull)
+  country     Country? @relation("SpeakerResidence", fields: [countryId], references: [id], onDelete: SetNull)
+  nationality Country? @relation("SpeakerNationality", fields: [nationalityCountryId], references: [id], onDelete: SetNull)
+
+  pillars     SpeakerPillar[]
+  themes      SpeakerTheme[]
+  keywords    SpeakerKeyword[]
+  formats     SpeakerFormat[]
+  languages   SpeakerLanguage[]
+  pricing     SpeakerPricing?
+  engagements SignatureEngagement[]
+  // Table unique (fusion Phase 1 + 2b — consolidation Partie A) : plus de
+  // relation "mediaAssets" séparée.
+  media       SpeakerMedia[]        @relation("SpeakerMedia")
+
+  bookingRequests     BookingRequest[]            @relation("RequestedSpeaker")
+  sourceApplication   RosterApplication?          @relation("ApplicationConversion")
+  revisions           SpeakerRevision[]           @relation("SpeakerRevisions")
+  documents           SpeakerDocument[]           @relation("SpeakerDocuments")
+  availabilityPeriods SpeakerAvailabilityPeriod[] @relation("SpeakerAvailabilityPeriods")
+  travelPreference    SpeakerTravelPreference?    @relation("SpeakerTravelPreference")
+  analyticsEvents     AnalyticsEvent[]            @relation("SpeakerAnalyticsEvents")
+
+  @@index([status])
+  @@index([isTopRequested])
+  @@index([isFeaturedHome])
+  @@index([isVisible])
+  @@index([countryId])
+  @@map("speakers")
+}
+
+// Association speaker <-> pilier (principal + secondaires). Public : top 3 ordonnés.
+model SpeakerPillar {
+  id           Int     @id @default(autoincrement())
+  speakerId    Int     @map("speaker_id")
+  pillarId     Int     @map("pillar_id")
+  isPrimary    Boolean @default(false) @map("is_primary")
+  displayOrder Int     @default(0) @map("display_order")
+
+  speaker Speaker @relation(fields: [speakerId], references: [id], onDelete: Cascade)
+  pillar  Pillar  @relation(fields: [pillarId], references: [id], onDelete: Cascade)
+
+  @@unique([speakerId, pillarId])
+  @@index([pillarId])
+  @@map("speaker_pillars")
+}
+
+model SpeakerTheme {
+  id        Int @id @default(autoincrement())
+  speakerId Int @map("speaker_id")
+  themeId   Int @map("theme_id")
+
+  speaker Speaker @relation(fields: [speakerId], references: [id], onDelete: Cascade)
+  theme   Theme   @relation(fields: [themeId], references: [id], onDelete: Cascade)
+
+  @@unique([speakerId, themeId])
+  @@index([themeId])
+  @@map("speaker_themes")
+}
+
+model SpeakerKeyword {
+  id        Int    @id @default(autoincrement())
+  speakerId Int    @map("speaker_id")
+  keyword   String @db.VarChar(120)
+
+  speaker Speaker @relation(fields: [speakerId], references: [id], onDelete: Cascade)
+
+  @@unique([speakerId, keyword])
+  @@index([keyword])
+  @@map("speaker_keywords")
+}
+
+model SpeakerFormat {
+  id        Int @id @default(autoincrement())
+  speakerId Int @map("speaker_id")
+  formatId  Int @map("format_id")
+
+  speaker Speaker @relation(fields: [speakerId], references: [id], onDelete: Cascade)
+  format  Format  @relation(fields: [formatId], references: [id], onDelete: Cascade)
+
+  @@unique([speakerId, formatId])
+  @@index([formatId])
+  @@map("speaker_formats")
+}
+
+model SpeakerLanguage {
+  id          Int                 @id @default(autoincrement())
+  speakerId   Int                 @map("speaker_id")
+  languageId  Int                 @map("language_id")
+  proficiency LanguageProficiency @default(FLUENT)
+  canPresent  Boolean             @default(true) @map("can_present")
+  canQa       Boolean             @default(true) @map("can_qa")
+  canModerate Boolean             @default(false) @map("can_moderate")
+
+  speaker  Speaker  @relation(fields: [speakerId], references: [id], onDelete: Cascade)
+  language Language @relation(fields: [languageId], references: [id], onDelete: Cascade)
+
+  @@unique([speakerId, languageId])
+  @@index([languageId])
+  @@map("speaker_languages")
+}
+
+// PRIVÉ — ne JAMAIS exposer via l'API publique. Relation 1:1 avec Speaker.
+model SpeakerPricing {
+  id               Int      @id @default(autoincrement())
+  speakerId        Int      @unique @map("speaker_id")
+  currency         String   @default("USD") @db.VarChar(3)
+  minFee           Decimal? @map("min_fee") @db.Decimal(12, 2)
+  recommendedFee   Decimal? @map("recommended_fee") @db.Decimal(12, 2)
+  feeKeynote       Decimal? @map("fee_keynote") @db.Decimal(12, 2)
+  feePanel         Decimal? @map("fee_panel") @db.Decimal(12, 2)
+  feeWebinar       Decimal? @map("fee_webinar") @db.Decimal(12, 2)
+  feeMasterclass   Decimal? @map("fee_masterclass") @db.Decimal(12, 2)
+  feeAdvisory      Decimal? @map("fee_advisory") @db.Decimal(12, 2)
+  feeOneToOne      Decimal? @map("fee_one_to_one") @db.Decimal(12, 2)
+  travelFees       String?  @map("travel_fees") @db.Text
+  negotiationTerms String?  @map("negotiation_terms") @db.Text
+  agencyCommission Decimal? @map("agency_commission") @db.Decimal(5, 2) // en %
+  internalNotes    String?  @map("internal_notes") @db.Text
+  updatedAt        DateTime @updatedAt @map("updated_at")
+
+  speaker Speaker @relation(fields: [speakerId], references: [id], onDelete: Cascade)
+
+  @@map("speaker_pricing")
+}
+
+// Signature Engagements (public) — expériences marquantes
+model SignatureEngagement {
+  id           Int       @id @default(autoincrement())
+  speakerId    Int       @map("speaker_id")
+  eventName    String    @map("event_name") @db.VarChar(250)
+  organization String?   @db.VarChar(200)
+  countryId    Int?      @map("country_id")
+  eventDate    DateTime? @map("event_date") @db.Date
+  dateLabel    String?   @map("date_label") @db.VarChar(40) // ex : "2024" quand la date exacte est inconnue
+  role         String?   @db.VarChar(160)
+  topic        String?   @db.VarChar(250)
+  description  String?   @db.Text
+  photoUrl     String?   @map("photo_url") @db.VarChar(500)
+  videoUrl     String?   @map("video_url") @db.VarChar(500)
+  externalUrl  String?   @map("external_url") @db.VarChar(500)
+  displayOrder Int       @default(0) @map("display_order")
+  createdAt    DateTime  @default(now()) @map("created_at")
+
+  speaker Speaker  @relation(fields: [speakerId], references: [id], onDelete: Cascade)
+  country Country? @relation(fields: [countryId], references: [id], onDelete: SetNull)
+
+  @@index([speakerId])
+  @@map("signature_engagements")
+}
+
+// =============================================================================
+// GALERIE SPEAKER (médias publics) — cf. CLAUDE.md : table UNIQUE, tout média
+// public passe par status = APPROVED avant d'être visible. Écrite par deux
+// chemins : le CRUD admin (Phase 1b — un média créé par un ADMIN/SUPER_ADMIN
+// est écrit directement en APPROVED, reviewedById = l'admin courant, il ne
+// s'auto-valide pas via la file de revue) et l'upload en libre-service par
+// le speaker (Phase 2b — PENDING_REVIEW jusqu'à décision admin via
+// /admin/speaker-media). Fusion de deux tables historiques (Phase 1
+// "speaker_media" admin-curée + Phase 2b "speaker_media_assets" en
+// libre-service) en une seule — voir la migration
+// merge_speaker_media_into_assets pour l'historique.
+// -----------------------------------------------------------------------------
+// `url` = fichier stocké (storage/public/) pour PHOTO/PRESS_KIT, lien
+// d'embed externe (YouTube/Vimeo) pour VIDEO.
+// =============================================================================
+
+model SpeakerMedia {
+  id              Int               @id @default(autoincrement())
+  speakerId       Int               @map("speaker_id")
+  type            MediaType
+  url             String            @db.VarChar(500)
+  thumbnailUrl    String?           @map("thumbnail_url") @db.VarChar(500)
+  title           String?           @db.VarChar(250)
+  caption         String?           @db.Text
+  displayOrder    Int               @default(0) @map("display_order")
+  status          MediaReviewStatus @default(PENDING_REVIEW)
+  reviewedAt      DateTime?         @map("reviewed_at")
+  reviewedById    Int?              @map("reviewed_by_id")
+  rejectionReason String?           @map("rejection_reason") @db.Text
+  createdAt       DateTime          @default(now()) @map("created_at")
+  updatedAt       DateTime          @updatedAt @map("updated_at")
+  deletedAt       DateTime?         @map("deleted_at")
+
+  speaker    Speaker @relation("SpeakerMedia", fields: [speakerId], references: [id], onDelete: Cascade)
+  reviewedBy User?   @relation("MediaReviewer", fields: [reviewedById], references: [id], onDelete: SetNull)
+
+  @@index([speakerId])
+  @@index([status])
+  @@map("speaker_media")
+}
+
+// =============================================================================
+// DOCUMENTS PRIVÉS (Phase 2, §2c) — CV, attestations. Ne sortent JAMAIS
+// publiquement : `storageKey` n'est ni servi par une route statique
+// (contrairement à storage/public/) ni jamais renvoyé tel quel par l'API —
+// seul un lien signé à expiration courte (voir speaker-documents module)
+// donne accès au contenu. Types sensibles (pièce d'identité, coordonnées
+// bancaires) volontairement absents : prévus en v2 avec chiffrement au repos.
+// =============================================================================
+
+model SpeakerDocument {
+  id               Int                 @id @default(autoincrement())
+  speakerId        Int                 @map("speaker_id")
+  type             SpeakerDocumentType
+  storageKey       String              @map("storage_key") @db.VarChar(500)
+  originalFilename String              @map("original_filename") @db.VarChar(255)
+  mimeType         String              @map("mime_type") @db.VarChar(100)
+  sizeBytes        Int                 @map("size_bytes")
+  uploadedAt       DateTime            @default(now()) @map("uploaded_at")
+  deletedAt        DateTime?           @map("deleted_at")
+
+  speaker Speaker @relation("SpeakerDocuments", fields: [speakerId], references: [id], onDelete: Cascade)
+
+  @@index([speakerId])
+  @@map("speaker_documents")
+}
+
+// =============================================================================
+// DISPONIBILITÉS (Phase 2, §2d) — cf. cahier des charges §17.
+// -----------------------------------------------------------------------------
+// PRIVÉ — jamais exposé par l'API publique (ni les périodes, ni les pays de
+// déplacement, ni les notes) : voir CLAUDE.md. Ne passe PAS par le workflow
+// de révision (speaker_revisions) : donnée interne, effective immédiatement,
+// jamais soumise à validation admin.
+//
+// Modèle "disponible par défaut, sauf exception" : l'ABSENCE de période pour
+// un speaker signifie "on ne sait pas" (UNKNOWN côté service), jamais
+// "indisponible" — on ne bloque pas une opportunité parce qu'un speaker n'a
+// rien saisi. En cas de chevauchement entre une période AVAILABLE et une
+// période UNAVAILABLE, UNAVAILABLE l'emporte TOUJOURS (voir
+// SpeakerAvailabilityService#evaluateAvailability, qui applique et teste
+// cette règle).
+//
+// startDate/endDate en DATE (pas DATETIME) — voir la note pédagogique dans
+// SpeakerAvailabilityService : la granularité "journée" suffit pour ce
+// besoin métier et évite toute la classe de bugs liée aux fuseaux horaires
+// qu'introduirait un DATETIME. Bornes INCLUSIVES des deux côtés. Interprétées
+// dans le fuseau horaire du speaker (Speaker.timezone).
+// =============================================================================
+
+model SpeakerAvailabilityPeriod {
+  id        Int                    @id @default(autoincrement())
+  speakerId Int                    @map("speaker_id")
+  type      AvailabilityPeriodType
+  startDate DateTime               @map("start_date") @db.Date
+  endDate   DateTime               @map("end_date") @db.Date
+  reason    String?                @db.Text // usage interne uniquement, jamais public
+  createdAt DateTime               @default(now()) @map("created_at")
+  updatedAt DateTime               @updatedAt @map("updated_at")
+  deletedAt DateTime?              @map("deleted_at")
+
+  speaker Speaker @relation("SpeakerAvailabilityPeriods", fields: [speakerId], references: [id], onDelete: Cascade)
+
+  @@index([speakerId])
+  @@index([type])
+  @@map("speaker_availability_periods")
+}
+
+// PRIVÉ, relation 1:1 avec Speaker. `minimumNoticeDays` = délai minimum de
+// réservation (§17). `countries` n'est consulté que si travelScope =
+// SELECTED_COUNTRIES (voir SpeakerTravelPreferenceCountry ci-dessous).
+model SpeakerTravelPreference {
+  id                  Int         @id @default(autoincrement())
+  speakerId           Int         @unique @map("speaker_id")
+  travelScope         TravelScope @default(WORLDWIDE) @map("travel_scope")
+  availableForVirtual Boolean     @default(true) @map("available_for_virtual")
+  minimumNoticeDays   Int         @default(0) @map("minimum_notice_days")
+  notes               String?     @db.Text // usage interne
+  createdAt           DateTime    @default(now()) @map("created_at")
+  updatedAt           DateTime    @updatedAt @map("updated_at")
+
+  speaker   Speaker                          @relation("SpeakerTravelPreference", fields: [speakerId], references: [id], onDelete: Cascade)
+  countries SpeakerTravelPreferenceCountry[]
+
+  @@map("speaker_travel_preferences")
+}
+
+// Table de jonction many-to-many, même pattern que SpeakerPillar/SpeakerFormat.
+model SpeakerTravelPreferenceCountry {
+  id                 Int @id @default(autoincrement())
+  travelPreferenceId Int @map("travel_preference_id")
+  countryId          Int @map("country_id")
+
+  travelPreference SpeakerTravelPreference @relation(fields: [travelPreferenceId], references: [id], onDelete: Cascade)
+  country          Country                 @relation(fields: [countryId], references: [id], onDelete: Cascade)
+
+  @@unique([travelPreferenceId, countryId])
+  @@index([countryId])
+  @@map("speaker_travel_preference_countries")
+}
+
+// =============================================================================
+// CLIENTS — ORGANISATIONS ET CONTACTS (Phase 3, étape 3a — cf. §12/§14.1/§14.3)
+// -----------------------------------------------------------------------------
+// Ces fiches CRM sont DISTINCTES des données d'intake de `booking_requests`/
+// `roster_applications` : ces dernières restent la trace immuable de ce que
+// le prospect a soumis (jamais réécrites, jamais transformées en FK). Une
+// fiche `Organization`/`Contact` n'existe que si l'équipe a explicitement
+// décidé du rattachement (automatique par email exact, ou manuel via
+// PATCH /admin/booking-requests/:id/link) — voir CLAUDE.md.
+//
+// Fusion de doublons (organisation A absorbe B) : HORS PÉRIMÈTRE de cette
+// étape. Un endpoint de fusion sera nécessaire plus tard (ex. Phase 3b/3c ou
+// une étape dédiée) — pas construit ici, volontairement.
+// =============================================================================
+
+model Organization {
+  id              Int       @id @default(autoincrement())
+  name            String    @db.VarChar(250)
+  sector          String?   @db.VarChar(120)
+  countryId       Int?      @map("country_id")
+  website         String?   @db.VarChar(500)
+  internalNotes   String?   @map("internal_notes") @db.Text
+  assignedAdminId Int?      @map("assigned_admin_id")
+  createdAt       DateTime  @default(now()) @map("created_at")
+  updatedAt       DateTime  @updatedAt @map("updated_at")
+  deletedAt       DateTime? @map("deleted_at")
+
+  country         Country?         @relation(fields: [countryId], references: [id], onDelete: SetNull)
+  assignedAdmin   User?            @relation("OrganizationAssignee", fields: [assignedAdminId], references: [id], onDelete: SetNull)
+  contacts        Contact[]
+  bookingRequests BookingRequest[] @relation("BookingOrganization")
+
+  @@index([countryId])
+  @@index([assignedAdminId])
+  @@map("organizations")
+}
+
+model Contact {
+  id              Int       @id @default(autoincrement())
+  firstName       String    @map("first_name") @db.VarChar(120)
+  lastName        String    @map("last_name") @db.VarChar(120)
+  email           String    @db.VarChar(191)
+  // Email normalisé (minuscules, trim), NULL quand la ligne est soft-deleted
+  // — même pattern que SpeakerRevision.activeGuard (Phase 2a) : MySQL
+  // autorise plusieurs NULL mais garantit l'unicité de toute valeur
+  // non-NULL. C'est la BASE qui porte la contrainte d'unicité (index
+  // UNIQUE), jamais une vérification applicative "findFirst puis create"
+  // qui laisserait une fenêtre de course entre deux requêtes concurrentes.
+  // Libère l'email pour une nouvelle fiche dès qu'un contact est
+  // soft-deleted (voir ContactsService#remove).
+  normalizedEmail String?   @unique @map("normalized_email") @db.VarChar(191)
+  phone           String?   @db.VarChar(50)
+  jobTitle        String?   @map("job_title") @db.VarChar(200)
+  organizationId  Int?      @map("organization_id")
+  countryId       Int?      @map("country_id")
+  internalNotes   String?   @map("internal_notes") @db.Text
+  createdAt       DateTime  @default(now()) @map("created_at")
+  updatedAt       DateTime  @updatedAt @map("updated_at")
+  deletedAt       DateTime? @map("deleted_at")
+
+  organization    Organization?    @relation(fields: [organizationId], references: [id], onDelete: SetNull)
+  country         Country?         @relation(fields: [countryId], references: [id], onDelete: SetNull)
+  bookingRequests BookingRequest[] @relation("BookingContact")
+
+  @@index([organizationId])
+  @@index([countryId])
+  @@map("contacts")
+}
+
+// =============================================================================
+// DEMANDES CLIENTS (ingestion des 5 formulaires du site public)
+// -----------------------------------------------------------------------------
+// Table UNIFIÉE : un tronc commun + un discriminant `serviceType`.
+// Les champs propres à chaque formulaire vont dans `metadata` (JSON).
+// =============================================================================
+
+model BookingRequest {
+  id          Int             @id @default(autoincrement())
+  reference   String          @unique @db.VarChar(30) // n° de dossier généré (ex : ASB-2026-000123)
+  serviceType ServiceType     @map("service_type")
+  status      BookingStatus   @default(NEW)
+  priority    BookingPriority @default(NORMAL)
+
+  // --- Contact ---
+  fullName          String  @map("full_name") @db.VarChar(200)
+  organization      String? @db.VarChar(200)
+  jobTitle          String? @map("job_title") @db.VarChar(200) // utilisé par One-to-One
+  workEmail         String  @map("work_email") @db.VarChar(191)
+  phone             String? @db.VarChar(50)
+  websiteOrLinkedin String? @map("website_or_linkedin") @db.VarChar(500) // One-to-One
+
+  // --- Événement ---
+  eventName     String?   @map("event_name") @db.VarChar(250)
+  eventDate     DateTime? @map("event_date")
+  eventLocation String?   @map("event_location") @db.VarChar(250) // "Ville, Pays" ou "Virtual"
+  eventFormat   String?   @map("event_format") @db.VarChar(120) // options différentes selon le service -> texte
+  audienceSize  String?   @map("audience_size") @db.VarChar(60)
+  sessionLength String?   @map("session_length") @db.VarChar(60)
+  language      String?   @db.VarChar(80)
+
+  // --- Objectifs & logistique ---
+  primaryTopics      String? @map("primary_topics") @db.Text
+  goals              String? @db.Text
+  speakerPreferences String? @map("speaker_preferences") @db.Text
+  estimatedBudget    String? @map("estimated_budget") @db.VarChar(120)
+  additionalComments String? @map("additional_comments") @db.Text
+
+  // --- Spécifique One-to-One ---
+  visitPurpose  OneToOnePurpose? @map("visit_purpose")
+  keyQuestions  String?          @map("key_questions") @db.Text
+  preferredTime String?          @map("preferred_time") @db.VarChar(120)
+
+  // Champs additionnels propres au formulaire (souplesse)
+  metadata Json?
+
+  // --- Gestion interne ---
+  requestedSpeakerId Int?                 @map("requested_speaker_id") // pré-rempli via "Check Availability"
+  assignedAdminId    Int?                 @map("assigned_admin_id")
+  // `internalNotes` (Phase 1, champ texte unique) SUPPRIMÉ en Phase 3b : deux
+  // admins qui écrivent en même temps s'écrasaient mutuellement — remplacé
+  // par `booking_request_notes`, en ajout seul (voir §2.3 du prompt Phase 3b
+  // et CLAUDE.md). Aucune ligne en production au moment de cette migration.
+  source             BookingRequestSource @default(PUBLIC_FORM)
+  gdprConsent        Boolean              @default(false) @map("gdpr_consent")
+  responseDueAt      DateTime?            @map("response_due_at")
+  // Renseigné à la première transition hors NEW OU à la première note interne
+  // (le premier des deux events) — voir BookingRequestsService. `isOverdue`
+  // (responseDueAt dépassé ET firstRespondedAt vide) est CALCULÉ, jamais
+  // stocké : voir toDetailDto/toListItemDto.
+  firstRespondedAt   DateTime?            @map("first_responded_at")
+
+  // --- Consentement (Phase 3b, §3) — TRANSITION DOUCE ---
+  // Le site public ne renvoie pas encore ces champs : nullable, jamais
+  // obligatoire tant que REQUIRE_CONSENT (booking-request.constants.ts) vaut
+  // false. Voir CLAUDE.md pour la condition de bascule.
+  consentGivenAt DateTime? @map("consent_given_at")
+  consentVersion String?   @map("consent_version") @db.VarChar(60)
+
+  // --- Rattachement CRM (Phase 3, §3a) ---
+  // Décidé par l'équipe (auto ou manuel via PATCH .../link), JAMAIS la donnée
+  // d'origine : `fullName`/`workEmail`/`organization` ci-dessus restent la
+  // trace exacte de ce que le prospect a soumis, immuables (voir CLAUDE.md).
+  contactId      Int? @map("contact_id")
+  organizationId Int? @map("organization_id")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  requestedSpeaker   Speaker?                   @relation("RequestedSpeaker", fields: [requestedSpeakerId], references: [id], onDelete: SetNull)
+  assignedAdmin      User?                      @relation("BookingAssignee", fields: [assignedAdminId], references: [id], onDelete: SetNull)
+  // Noms de relation "linked..." (pas "contact"/"organization" tout court) :
+  // `organization` est déjà pris par la colonne texte libre d'intake
+  // ci-dessus — pas de collision de nom possible côté client Prisma généré.
+  linkedContact      Contact?                   @relation("BookingContact", fields: [contactId], references: [id], onDelete: SetNull)
+  linkedOrganization Organization?              @relation("BookingOrganization", fields: [organizationId], references: [id], onDelete: SetNull)
+  notes              BookingRequestNote[]
+  attachments        BookingRequestAttachment[]
+  reminders          Reminder[]
+
+  @@index([serviceType])
+  @@index([status])
+  @@index([contactId])
+  @@index([organizationId])
+  @@index([priority])
+  @@index([assignedAdminId])
+  @@index([createdAt])
+  @@map("booking_requests")
+}
+
+// Notes internes en AJOUT SEUL (§2.3) : jamais de modification, seulement
+// création et (soft) suppression par l'auteur ou un SUPER_ADMIN. Deux admins
+// qui écrivent "en même temps" produisent deux lignes distinctes, jamais un
+// écrasement — c'est tout l'intérêt de ce modèle par rapport à un champ texte
+// unique (voir le champ `internalNotes` supprimé ci-dessus).
+model BookingRequestNote {
+  id        Int       @id @default(autoincrement())
+  requestId Int       @map("request_id")
+  authorId  Int?      @map("author_id")
+  body      String    @db.Text
+  createdAt DateTime  @default(now()) @map("created_at")
+  deletedAt DateTime? @map("deleted_at")
+
+  request BookingRequest @relation(fields: [requestId], references: [id], onDelete: Cascade)
+  author  User?          @relation("BookingRequestNoteAuthor", fields: [authorId], references: [id], onDelete: SetNull)
+
+  @@index([requestId])
+  @@map("booking_request_notes")
+}
+
+// Pièces jointes — RÉUTILISE la brique de stockage privé de la Phase 2c
+// (StorageService.savePrivate, validation par magic bytes, liens signés à
+// expiration, revalidation en base avant streaming). Jamais de route
+// publique, jamais accessible à un rôle SPEAKER (§2.4).
+model BookingRequestAttachment {
+  id               Int       @id @default(autoincrement())
+  requestId        Int       @map("request_id")
+  storageKey       String    @map("storage_key") @db.VarChar(500)
+  originalFilename String    @map("original_filename") @db.VarChar(255)
+  mimeType         String    @map("mime_type") @db.VarChar(150)
+  sizeBytes        Int       @map("size_bytes")
+  uploadedById     Int?      @map("uploaded_by_id")
+  uploadedAt       DateTime  @default(now()) @map("uploaded_at")
+  deletedAt        DateTime? @map("deleted_at")
+
+  request    BookingRequest @relation(fields: [requestId], references: [id], onDelete: Cascade)
+  uploadedBy User?          @relation("BookingRequestAttachmentUploader", fields: [uploadedById], references: [id], onDelete: SetNull)
+
+  @@index([requestId])
+  @@map("booking_request_attachments")
+}
+
+// Rappels (§2.6) — une tâche planifiée horaire (@nestjs/schedule) envoie par
+// email les rappels échus. Voir RemindersScheduler pour la limite documentée
+// (une seule instance de l'app aujourd'hui, pas de verrou distribué).
+model Reminder {
+  id           Int       @id @default(autoincrement())
+  requestId    Int       @map("request_id")
+  dueAt        DateTime  @map("due_at")
+  assignedToId Int?      @map("assigned_to_id")
+  message      String    @db.Text
+  doneAt       DateTime? @map("done_at")
+  createdById  Int?      @map("created_by_id")
+  createdAt    DateTime  @default(now()) @map("created_at")
+
+  request    BookingRequest @relation(fields: [requestId], references: [id], onDelete: Cascade)
+  assignedTo User?          @relation("ReminderAssignee", fields: [assignedToId], references: [id], onDelete: SetNull)
+  createdBy  User?          @relation("ReminderCreator", fields: [createdById], references: [id], onDelete: SetNull)
+
+  @@index([requestId])
+  @@index([dueAt])
+  @@map("reminders")
+}
+
+// =============================================================================
+// CANDIDATURES SPEAKERS ("Apply to Join Our Roster") — Phase 1 (intake) +
+// Phase 3, étape 3c (évaluation, machine à états, conversion en compte
+// speaker). Cf. cahier des charges §5.
+// -----------------------------------------------------------------------------
+// `internalScore`/`internalComment`/`evaluation` (Phase 1, grille libre en
+// JSON) SUPPRIMÉS en Phase 3c : remplacés par `roster_application_evaluations`
+// (une ligne PAR évaluateur, critères typés — voir plus bas) dont le score
+// agrégé est CALCULÉ à la lecture (voir aggregated-score.util.ts), jamais
+// stocké. Sûr sans backfill : vérifié 0 ligne en production avant cette
+// migration (voir migration add_roster_application_conversion).
+// =============================================================================
+
+model RosterApplication {
+  id        Int    @id @default(autoincrement())
+  reference String @unique @db.VarChar(30) // ex : APP-2026-000045
+
+  // --- Identité du candidat (intake IMMUABLE — cf. CLAUDE.md §5) ---
+  fullName      String  @map("full_name") @db.VarChar(200)
+  jobTitle      String? @map("job_title") @db.VarChar(200)
+  organization  String? @db.VarChar(200)
+  country       String? @db.VarChar(120) // texte libre (intake robuste)
+  workEmail     String  @map("work_email") @db.VarChar(191)
+  phone         String? @db.VarChar(50)
+  linkedinUrl   String? @map("linkedin_url") @db.VarChar(500)
+  expertiseArea String? @map("expertise_area") @db.VarChar(250)
+  keyTopics     String? @map("key_topics") @db.Text
+  message       String? @db.Text
+
+  // --- Traitement interne (Phase 3c) ---
+  status               ApplicationStatus @default(NEW)
+  assignedAdminId      Int?              @map("assigned_admin_id")
+  // Horodatage du DERNIER changement de statut (mis à jour à chaque
+  // transition, y compris reopen) — utile pour trier/filtrer "en attente
+  // depuis longtemps dans ce statut", indépendamment de createdAt/updatedAt
+  // (qui bouge aussi sur des changements non liés au statut, ex. assignation).
+  statusChangedAt      DateTime?         @map("status_changed_at")
+  interviewScheduledAt DateTime?         @map("interview_scheduled_at")
+  interviewNotes       String?           @map("interview_notes") @db.Text
+  rejectionReason      String?           @map("rejection_reason") @db.Text
+  gdprConsent          Boolean           @default(false) @map("gdpr_consent")
+
+  // --- Conversion (§4) — voir CLAUDE.md pour la garantie d'idempotence.
+  // Les DEUX colonnes sont uniques-nullables (même pattern que
+  // SpeakerRevision.activeGuard/Contact.normalizedEmail) : c'est la BASE,
+  // pas une vérification applicative "findFirst puis create", qui interdit
+  // qu'une candidature soit convertie deux fois — un double appel concurrent
+  // à /convert ne peut produire qu'UN SEUL user et UNE SEULE fiche speaker.
+  convertedSpeakerId Int?      @unique @map("converted_speaker_id")
+  convertedUserId    Int?      @unique @map("converted_user_id")
+  convertedAt        DateTime? @map("converted_at")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  assignedAdmin    User?                         @relation("ApplicationAssignee", fields: [assignedAdminId], references: [id], onDelete: SetNull)
+  convertedSpeaker Speaker?                      @relation("ApplicationConversion", fields: [convertedSpeakerId], references: [id], onDelete: SetNull)
+  convertedUser    User?                         @relation("ApplicationConvertedUser", fields: [convertedUserId], references: [id], onDelete: SetNull)
+  evaluations      RosterApplicationEvaluation[]
+  attachments      RosterApplicationAttachment[]
+
+  @@index([status])
+  @@index([assignedAdminId])
+  @@map("roster_applications")
+}
+
+// Évaluation interne — UNE PAR ÉVALUATEUR (§5.3 du cahier des charges).
+// Contrainte d'unicité (applicationId, evaluatorId) : un admin a une seule
+// évaluation par candidature, qu'il peut mettre à jour ; plusieurs admins
+// évaluent indépendamment (des avis distincts, jamais un score écrasé par le
+// dernier arrivé). 9 critères TYPÉS (pas un JSON) : stables, filtrables et
+// moyennables — voir aggregated-score.util.ts pour le calcul du score agrégé
+// (à la lecture, jamais stocké, formule isolée pour pouvoir la pondérer plus
+// tard). Strictement interne (CLAUDE.md §5) : jamais dans une réponse
+// publique, jamais visible par le candidat ni par un rôle SPEAKER même après
+// conversion — aucun endpoint de ce module n'est exposé hors ADMIN/SUPER_ADMIN.
+model RosterApplicationEvaluation {
+  id            Int @id @default(autoincrement())
+  applicationId Int @map("application_id")
+  evaluatorId   Int @map("evaluator_id")
+
+  // Notés de 1 à 5 (validé côté DTO — voir CreateEvaluationDto) : colonnes
+  // typées et STABLES, volontairement pas un JSON, pour rester filtrables et
+  // moyennables (cf. §5.3 du cahier des charges).
+  expertiseLevel          Int @map("expertise_level")
+  professionalCredibility Int @map("professional_credibility")
+  stageExperience         Int @map("stage_experience")
+  speakingQuality         Int @map("speaking_quality")
+  internationalRelevance  Int @map("international_relevance")
+  languageProficiency     Int @map("language_proficiency")
+  mediaQuality            Int @map("media_quality")
+  pillarFit               Int @map("pillar_fit")
+  commercialPotential     Int @map("commercial_potential")
+
+  comment String? @db.Text
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  application RosterApplication @relation(fields: [applicationId], references: [id], onDelete: Cascade)
+  evaluator   User              @relation("ApplicationEvaluator", fields: [evaluatorId], references: [id])
+
+  @@unique([applicationId, evaluatorId])
+  @@index([applicationId])
+  @@map("roster_application_evaluations")
+}
+
+// Pièces jointes — RÉUTILISE intégralement la brique de stockage privé de la
+// Phase 2c (StorageService.savePrivate, magic bytes, liens signés HMAC via
+// common/utils/signed-link.util.ts), exactement le même modèle que
+// BookingRequestAttachment (Phase 3b). Jamais de route publique, jamais
+// accessible à un rôle SPEAKER.
+model RosterApplicationAttachment {
+  id               Int       @id @default(autoincrement())
+  applicationId    Int       @map("application_id")
+  storageKey       String    @map("storage_key") @db.VarChar(500)
+  originalFilename String    @map("original_filename") @db.VarChar(255)
+  mimeType         String    @map("mime_type") @db.VarChar(150)
+  sizeBytes        Int       @map("size_bytes")
+  uploadedById     Int?      @map("uploaded_by_id")
+  uploadedAt       DateTime  @default(now()) @map("uploaded_at")
+  deletedAt        DateTime? @map("deleted_at")
+
+  application RosterApplication @relation(fields: [applicationId], references: [id], onDelete: Cascade)
+  uploadedBy  User?             @relation("RosterApplicationAttachmentUploader", fields: [uploadedById], references: [id], onDelete: SetNull)
+
+  @@index([applicationId])
+  @@map("roster_application_attachments")
+}
+
+// Token d'invitation (Phase 3c, §4.4) — DISTINCT de EmailVerificationToken
+// et PasswordResetToken (durée de vie longue, 14 jours par défaut, configurable
+// via INVITATION_TOKEN_TTL_DAYS) : émis UNE FOIS à la conversion d'une
+// candidature, permet au nouveau speaker de définir son mot de passe et
+// d'accepter les conditions de collaboration. Usage unique (`usedAt`), un
+// renvoi (RosterApplicationsService#resendInvitation) invalide l'ancien
+// (marqué usedAt) avant d'en émettre un nouveau — jamais deux tokens actifs
+// pour le même compte.
+model InvitationToken {
+  id        Int       @id @default(autoincrement())
+  userId    Int       @map("user_id")
+  token     String    @unique @db.VarChar(255)
+  expiresAt DateTime  @map("expires_at")
+  usedAt    DateTime? @map("used_at")
+  createdAt DateTime  @default(now()) @map("created_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("invitation_tokens")
+}
+
+// =============================================================================
+// RÉVISIONS DE PROFIL SPEAKER (Phase 2 — brouillon + validation admin)
+// -----------------------------------------------------------------------------
+// `speakers` reste la version LIVE (source de vérité pour l'API publique).
+// Une révision est une proposition de modification en attente : `payload`
+// contient uniquement les champs de l'allow-list speaker (voir
+// modules/speaker-revisions/speaker-revision.constants.ts), jamais appliquée
+// à `speakers` avant l'approbation admin.
+//
+// Contrainte "un seul brouillon actif (DRAFT/SUBMITTED/CHANGES_REQUESTED) par
+// speaker" : MySQL ne supporte pas les index uniques partiels/filtrés
+// (`WHERE status IN (...)`), donc on émule via `activeGuard` — NULL quand la
+// révision est terminale (APPROVED/REJECTED/WITHDRAWN), sinon égal à
+// `speakerId`. Un index UNIQUE sur cette colonne autorise n'importe quel
+// nombre de NULL (MySQL les traite comme distincts) mais interdit deux lignes
+// avec la MÊME valeur non-NULL — donc deux révisions actives pour le même
+// speaker. Ça ferme la fenêtre de course que la simple vérification
+// "findFirst puis create" en application ne peut pas fermer seule (deux
+// requêtes PUT concurrentes pourraient toutes les deux lire "aucun brouillon
+// actif" avant que l'une des deux ne commit). Maintenu par
+// SpeakerRevisionsService à la création/l'approbation/le refus.
+// =============================================================================
+
+model SpeakerRevision {
+  id              Int            @id @default(autoincrement())
+  speakerId       Int            @map("speaker_id")
+  payload         Json
+  status          RevisionStatus @default(DRAFT)
+  // Voir le commentaire ci-dessus. Nullable + @unique : MySQL autorise
+  // plusieurs NULL mais garantit l'unicité de toute valeur non-NULL.
+  activeGuard     Int?           @unique @map("active_guard")
+  submittedAt     DateTime?      @map("submitted_at")
+  reviewedAt      DateTime?      @map("reviewed_at")
+  reviewedById    Int?           @map("reviewed_by_id")
+  reviewerComment String?        @map("reviewer_comment") @db.Text
+  createdAt       DateTime       @default(now()) @map("created_at")
+  updatedAt       DateTime       @updatedAt @map("updated_at")
+
+  speaker    Speaker @relation("SpeakerRevisions", fields: [speakerId], references: [id], onDelete: Cascade)
+  reviewedBy User?   @relation("RevisionReviewer", fields: [reviewedById], references: [id], onDelete: SetNull)
+
+  @@index([speakerId])
+  @@index([status])
+  @@map("speaker_revisions")
+}
+
+// =============================================================================
+// JOURNAL D'ACTIVITÉ (transversal, utile dès le départ — cf. §23)
+// =============================================================================
+
+model ActivityLog {
+  id         Int      @id @default(autoincrement())
+  actorId    Int?     @map("actor_id") // null = action système
+  action     String   @db.VarChar(120) // ex : "speaker.published", "booking.assigned"
+  entityType String?  @map("entity_type") @db.VarChar(80)
+  entityId   Int?     @map("entity_id")
+  oldValue   Json?    @map("old_value")
+  newValue   Json?    @map("new_value")
+  ipAddress  String?  @map("ip_address") @db.VarChar(60)
+  createdAt  DateTime @default(now()) @map("created_at")
+
+  actor User? @relation(fields: [actorId], references: [id], onDelete: SetNull)
+
+  @@index([actorId])
+  @@index([entityType, entityId])
+  @@index([createdAt])
+  @@map("activity_logs")
+}
+
+// =============================================================================
+// TRAÇAGE ANALYTICS (Phase 3, étape 3a — cf. §14.1/§14.3)
+// -----------------------------------------------------------------------------
+// Brut, PAS agrégé : aucun compteur dénormalisé, aucune vue matérialisée ici —
+// la Phase 4 lira ce brut pour construire ses statistiques. PRIVÉ (jamais
+// exposé publiquement) ; ne passe PAS par activity_logs (volume trop
+// important pour un journal d'audit humain, et ce ne sont pas des actions
+// d'utilisateurs internes — voir AnalyticsService).
+//
+// AUCUNE IP en clair : `visitorHash` = HMAC-SHA256(sel du jour, IP +
+// user-agent). Voir AnalyticsService pour le détail et la justification du
+// sel qui change chaque jour plutôt qu'un sel fixe.
+//
+// Politique de rétention à prévoir (purge du brut au-delà de 13 mois) :
+// PAS implémentée à cette étape — HORS PÉRIMÈTRE, à construire avec la
+// Phase 4 (ou une tâche cron dédiée) quand les besoins d'agrégation seront
+// connus et qu'on saura ce qu'il faut conserver au-delà du brut.
+// =============================================================================
+
+model AnalyticsEvent {
+  id          Int                @id @default(autoincrement())
+  type        AnalyticsEventType
+  speakerId   Int?               @map("speaker_id")
+  payload     Json?
+  visitorHash String             @map("visitor_hash") @db.VarChar(64)
+  isBot       Boolean            @default(false) @map("is_bot")
+  userAgent   String?            @map("user_agent") @db.VarChar(255)
+  referrer    String?            @db.VarChar(255)
+  createdAt   DateTime           @default(now()) @map("created_at")
+
+  speaker Speaker? @relation("SpeakerAnalyticsEvents", fields: [speakerId], references: [id], onDelete: SetNull)
+
+  @@index([type])
+  @@index([speakerId])
+  @@index([createdAt])
+  @@map("analytics_events")
+}

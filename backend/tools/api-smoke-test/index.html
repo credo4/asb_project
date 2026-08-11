@@ -1,0 +1,1196 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>ASB — Banc de test navigateur de l'API publique</title>
+<style>
+  :root {
+    --bg: #f5f6f8;
+    --panel: #ffffff;
+    --border: #d9dce1;
+    --text: #1a1a1a;
+    --muted: #6b7280;
+    --green: #1a7f37;
+    --green-bg: #ecfdf3;
+    --red: #b42318;
+    --red-bg: #fef3f2;
+    --blue: #175cd3;
+    --blue-bg: #eff8ff;
+    --code-bg: #0d1117;
+    --code-text: #e6edf3;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Arial, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    line-height: 1.5;
+  }
+  header {
+    background: var(--panel);
+    border-bottom: 1px solid var(--border);
+    padding: 16px 24px;
+    position: sticky;
+    top: 0;
+    z-index: 10;
+  }
+  header h1 { margin: 0 0 4px; font-size: 20px; }
+  header p.subtitle { margin: 0 0 12px; color: var(--muted); font-size: 13px; }
+  .controls-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+    align-items: center;
+  }
+  .controls-row label { font-size: 13px; color: var(--muted); }
+  #baseUrl {
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: 13px;
+    padding: 6px 8px;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    width: 380px;
+    max-width: 60vw;
+  }
+  button {
+    font-size: 13px;
+    padding: 7px 14px;
+    border-radius: 6px;
+    border: 1px solid var(--border);
+    background: #fff;
+    cursor: pointer;
+  }
+  button:hover { background: #f0f1f3; }
+  button.primary { background: #111827; color: #fff; border-color: #111827; }
+  button.primary:hover { background: #24304a; }
+  button:disabled { opacity: .5; cursor: not-allowed; }
+  button.small { padding: 3px 10px; font-size: 12px; }
+  #counters {
+    margin-left: auto;
+    display: flex;
+    gap: 14px;
+    font-size: 13px;
+    font-weight: 600;
+  }
+  #counters .ok { color: var(--green); }
+  #counters .ko { color: var(--red); }
+  #counters .info { color: var(--blue); }
+
+  main { max-width: 1100px; margin: 0 auto; padding: 20px 24px 80px; }
+
+  .notice {
+    border: 1px solid #f0c36d;
+    background: #fffaeb;
+    color: #93670a;
+    padding: 10px 14px;
+    border-radius: 8px;
+    font-size: 13px;
+    margin-bottom: 12px;
+  }
+  .notice.danger { border-color: #f0a29c; background: var(--red-bg); color: var(--red); }
+  .notice strong { display: block; margin-bottom: 2px; }
+
+  section.group {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    margin-bottom: 20px;
+    overflow: hidden;
+  }
+  section.group > h2 {
+    margin: 0;
+    padding: 12px 16px;
+    font-size: 15px;
+    background: #fafbfc;
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+  section.group > h2 small { color: var(--muted); font-weight: normal; font-size: 12px; }
+
+  .test {
+    border-bottom: 1px solid var(--border);
+    padding: 10px 16px;
+  }
+  .test:last-child { border-bottom: none; }
+  .test-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex-wrap: wrap;
+  }
+  .test-name { font-weight: 600; font-size: 13.5px; min-width: 220px; }
+  .test-url {
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: 12px;
+    color: var(--muted);
+    word-break: break-all;
+  }
+  .badge {
+    display: inline-block;
+    padding: 2px 8px;
+    border-radius: 999px;
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: .02em;
+  }
+  .badge.pass { background: var(--green-bg); color: var(--green); }
+  .badge.fail { background: var(--red-bg); color: var(--red); }
+  .badge.info { background: var(--blue-bg); color: var(--blue); }
+  .badge.pending { background: #f3f4f6; color: var(--muted); }
+  .status-code { font-family: ui-monospace, monospace; font-size: 12px; }
+  .elapsed { font-size: 12px; color: var(--muted); }
+  .test-actions { margin-left: auto; }
+
+  .test-detail { margin-top: 6px; font-size: 13px; }
+  .reason { color: var(--red); font-size: 12.5px; margin-top: 4px; }
+  .reason.ok-reason { color: var(--green); }
+  .reason.info-reason { color: var(--blue); }
+
+  .leak-line { margin-top: 6px; font-size: 12.5px; }
+  .leak-line.clean { color: var(--green); }
+  .leak-line.dirty { color: var(--red); font-weight: 600; }
+  .leak-list { margin: 4px 0 0 0; padding-left: 18px; color: var(--red); font-size: 12px; }
+
+  details.raw { margin-top: 6px; }
+  details.raw summary { cursor: pointer; font-size: 12px; color: var(--muted); }
+  details.raw pre {
+    background: var(--code-bg);
+    color: var(--code-text);
+    padding: 10px;
+    border-radius: 6px;
+    overflow: auto;
+    max-height: 320px;
+    font-size: 12px;
+    margin: 6px 0 0;
+  }
+
+  #leakRollup { padding: 12px 16px; font-size: 13px; }
+  #leakRollup .clean { color: var(--green); font-weight: 600; }
+  #leakRollup .dirty { color: var(--red); font-weight: 600; }
+  #leakRollup ul { margin: 6px 0 0; padding-left: 20px; }
+
+  footer { text-align: center; color: var(--muted); font-size: 12px; padding: 20px; }
+  code.inline {
+    font-family: ui-monospace, monospace;
+    background: #eef0f2;
+    padding: 1px 5px;
+    border-radius: 4px;
+    font-size: 12px;
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>Banc de test navigateur — API publique ASB</h1>
+  <p class="subtitle">
+    Outil jetable, à lancer depuis un navigateur via un serveur statique — voir README.md.
+    Ne teste que ce qu'un visiteur non authentifié peut appeler.
+  </p>
+  <div class="controls-row">
+    <label for="baseUrl">URL de base de l'API</label>
+    <input id="baseUrl" type="text" value="https://royalblue-pigeon-889602.hostingersite.com" spellcheck="false" />
+    <button id="runAllBtn" class="primary">Tout lancer</button>
+    <button id="copyReportBtn">Copier le rapport</button>
+    <span id="copyFeedback" style="font-size:12px;color:var(--green);"></span>
+    <div id="counters">
+      <span class="ok" id="counterOk">0 réussi(s)</span>
+      <span class="ko" id="counterKo">0 échoué(s)</span>
+      <span class="info" id="counterInfo">0 info</span>
+    </div>
+  </div>
+</header>
+
+<main>
+
+  <div class="notice">
+    <strong>Ce banc de test crée de vraies données.</strong>
+    La section « Écriture » soumet réellement des formulaires publics (demandes, candidature,
+    événement analytics) contre l'API pointée ci-dessus. Chaque enregistrement créé est préfixé
+    <code class="inline">[TEST]</code> dans les champs texte visibles (nom d'événement, organisation,
+    message) pour pouvoir le repérer et le supprimer ensuite côté back-office. Voir README.md.
+  </div>
+
+  <div class="notice">
+    <strong>Deux écarts constatés entre ce prompt et le code actuel (non corrigés, juste signalés) :</strong>
+    <div style="margin-top:4px;">
+      1) <code class="inline">GET /public/speakers</code> n'expose AUCUN paramètre de tri dans
+      <code class="inline">QueryPublicSpeakersDto</code> — l'ordre est fixe côté serveur
+      (isTopRequested desc, isFeaturedHome desc, nom asc). Le test « options de tri » ci-dessous est
+      donc marqué non applicable plutôt que d'inventer un paramètre qui n'existe pas.<br />
+      2) Aucune route publique de « listes éditoriales » n'existe dans <code class="inline">src/modules/public/</code>
+      (seul un type d'événement analytics <code class="inline">CURATED_LIST_VIEW</code> existe, pour tracer la
+      consultation d'une liste qui vivrait ailleurs — probablement Phase 4/CMS, pas encore construite).
+      Test marqué non applicable également, pas d'endpoint inventé.
+    </div>
+  </div>
+
+  <div id="leakRollupSection" class="group" style="border-color:#f0a29c;">
+    <h2 style="background:#fef3f2;color:var(--red);">
+      🔒 Étanchéité public/privé — vue d'ensemble
+      <small>Le contrôle le plus important : cf. CLAUDE.md §5</small>
+    </h2>
+    <div id="leakRollup">Lance les tests pour voir le verdict par endpoint.</div>
+  </div>
+
+  <section class="group" id="group-taxonomies">
+    <h2>Lecture — Taxonomies <small>sources des menus déroulants du site public</small></h2>
+    <div class="tests"></div>
+  </section>
+
+  <section class="group" id="group-speakers">
+    <h2>Lecture — Speakers <small>liste, filtres, tri, détail</small></h2>
+    <div class="tests"></div>
+  </section>
+
+  <section class="group" id="group-write">
+    <h2>Écriture <small>crée de vraies données — voir avertissement ci-dessus</small></h2>
+    <div class="tests"></div>
+  </section>
+
+  <section class="group" id="group-errors">
+    <h2>Gestion des erreurs <small>404, 400, rate-limit</small></h2>
+    <div class="tests"></div>
+  </section>
+
+</main>
+
+<footer>
+  Outil jetable — pas du code de production. Africa Speakers Bureau.
+</footer>
+
+<script>
+"use strict";
+
+// =====================================================================
+// Configuration / état
+// =====================================================================
+
+const state = {
+  results: {},       // id -> normalized result
+  cache: {},          // mémoïsation des appels de lecture réutilisés par plusieurs tests
+};
+
+function baseUrl() {
+  return document.getElementById('baseUrl').value.trim().replace(/\/+$/, '');
+}
+
+// =====================================================================
+// Détection des données privées — LE contrôle le plus important (§2.4)
+// =====================================================================
+// Chaque motif matche sur le NOM de clé (pas la valeur), récursivement sur
+// tout l'arbre JSON. `feeTierPublic` est l'unique exception documentée :
+// c'est un niveau tarifaire INDICATIF public (cf. CLAUDE.md §5), pas un
+// tarif — il contient "fee" mais n'est pas une fuite.
+const ALLOWED_KEY_EXCEPTIONS = new Set(['feeTierPublic', 'showBudget', 'showLocation']);
+
+const FORBIDDEN_KEY_PATTERNS = [
+  { label: 'tarif / prix', re: /price|pricing|tariff|budget|commission|\bcost\b|minfee|recommendedfee|feekeynote|feepanel|feewebinar|feemasterclass|feeadvisory|feeonetoone|travelfees|negotiationterms|agencycommission/i },
+  { label: 'email', re: /email/i },
+  { label: 'téléphone', re: /phone|\btel\b|mobile/i },
+  { label: 'note interne', re: /internalnote|internalcomment|internalscore|\bnote\b|remark|memo/i },
+  { label: 'clé de stockage', re: /storagekey|filepath|\bs3\b|bucket/i },
+  { label: 'document privé', re: /document|\bcv\b|certificate|attachment/i },
+  { label: 'disponibilité', re: /availab|travelscope|travelpreference|minimumnoticedays/i },
+  { label: 'statut interne', re: /^status$|isvisible|deletedat|completionscore|gdprconsent/i },
+  { label: 'identifiant utilisateur / interne', re: /\buserid\b|\bspeakerid\b|assignedadminid|evaluatorid|uploadedbyid|reviewedbyid|actorid|convertedu|convertedspeaker|passwordhash|\btoken\b|\bsecret\b/i },
+];
+
+// Retourne la liste des { path, key, label } trouvés dans `data`.
+function scanForbidden(data) {
+  const findings = [];
+  function walk(node, path) {
+    if (node === null || node === undefined) return;
+    if (Array.isArray(node)) {
+      node.forEach((item, i) => walk(item, `${path}[${i}]`));
+      return;
+    }
+    if (typeof node === 'object') {
+      for (const key of Object.keys(node)) {
+        const childPath = path ? `${path}.${key}` : key;
+        if (!ALLOWED_KEY_EXCEPTIONS.has(key)) {
+          for (const pattern of FORBIDDEN_KEY_PATTERNS) {
+            if (pattern.re.test(key)) {
+              findings.push({ path: childPath, key, label: pattern.label });
+              break;
+            }
+          }
+        }
+        walk(node[key], childPath);
+      }
+    }
+  }
+  walk(data, '');
+  return findings;
+}
+
+// =====================================================================
+// Appel HTTP — distingue explicitement échec réseau/CORS (TypeError,
+// aucun code HTTP disponible) et réponse HTTP (2xx/4xx/5xx).
+// =====================================================================
+
+async function httpCall(method, path, body) {
+  const url = baseUrl() + path;
+  const started = performance.now();
+  try {
+    const res = await fetch(url, {
+      method,
+      headers: body !== undefined ? { 'Content-Type': 'application/json' } : undefined,
+      body: body !== undefined ? JSON.stringify(body) : undefined,
+    });
+    const elapsedMs = Math.round(performance.now() - started);
+    const rawText = await res.text();
+    let json = null;
+    try { json = rawText ? JSON.parse(rawText) : null; } catch { /* réponse non-JSON */ }
+    return { kind: 'http', method, url, status: res.status, elapsedMs, json, rawText };
+  } catch (err) {
+    const elapsedMs = Math.round(performance.now() - started);
+    // Un fetch qui rejette avec un TypeError, sans code HTTP du tout, ne
+    // permet PAS de distinguer une origine refusée par CORS d'une panne
+    // réseau/DNS pure — le navigateur masque volontairement la raison
+    // exacte pour des raisons de sécurité. On donne l'explication la plus
+    // probable plutôt qu'un message technique brut.
+    return {
+      kind: 'network',
+      method,
+      url,
+      elapsedMs,
+      errorMessage: (err && err.message) || String(err),
+    };
+  }
+}
+
+// =====================================================================
+// Rendu DOM
+// =====================================================================
+
+function el(tag, attrs, children) {
+  const node = document.createElement(tag);
+  if (attrs) {
+    for (const [k, v] of Object.entries(attrs)) {
+      if (k === 'class') node.className = v;
+      else if (k === 'text') node.textContent = v;
+      else if (k.startsWith('on') && typeof v === 'function') node.addEventListener(k.slice(2), v);
+      else node.setAttribute(k, v);
+    }
+  }
+  (children || []).forEach((c) => { if (c) node.appendChild(c); });
+  return node;
+}
+
+function badge(kind, text) {
+  return el('span', { class: `badge ${kind}`, text });
+}
+
+function ensureTestNode(test) {
+  let node = document.getElementById('test-' + test.id);
+  if (node) return node;
+  const container = document.querySelector(`#group-${test.group} .tests`);
+  node = el('div', { class: 'test', id: 'test-' + test.id });
+  container.appendChild(node);
+  return node;
+}
+
+function renderTest(test, result) {
+  const node = ensureTestNode(test);
+  node.innerHTML = '';
+
+  const row = el('div', { class: 'test-row' }, [
+    el('span', { class: 'test-name', text: test.name }),
+    el('span', { class: 'test-url', text: `${test.method} ${test.pathDescription}` }),
+    result.status !== undefined ? el('span', { class: 'status-code', text: String(result.status) }) : null,
+    result.elapsedMs !== undefined ? el('span', { class: 'elapsed', text: `${result.elapsedMs} ms` }) : null,
+    badge(result.verdictKind, result.verdictLabel),
+    el('span', { class: 'test-actions' }, [
+      el('button', { class: 'small', text: 'Rejouer', onclick: () => runSingle(test) }),
+    ]),
+  ]);
+  node.appendChild(row);
+
+  const detail = el('div', { class: 'test-detail' });
+
+  if (result.kind === 'network') {
+    detail.appendChild(el('div', { class: 'reason' , text:
+      `Échec réseau (TypeError, aucun code HTTP reçu) : ${result.errorMessage}. ` +
+      `Depuis un navigateur, ceci est INDISTINGUABLE entre une origine refusée par CORS et une panne ` +
+      `réseau/DNS pure. Le cas le plus probable est CORS : vérifie que l'origine de cette page ` +
+      `figure dans PUBLIC_SITE_ORIGINS (ou FRONTEND_URL/APP_URL) de l'environnement testé. ` +
+      `Vérifie aussi que l'URL de base est correcte et joignable.`
+    }));
+  } else if (result.reason) {
+    detail.appendChild(el('div', {
+      class: 'reason' + (result.verdictKind === 'pass' ? ' ok-reason' : result.verdictKind === 'info' ? ' info-reason' : ''),
+      text: result.reason,
+    }));
+  }
+
+  if (result.leakChecked) {
+    if (result.leaks && result.leaks.length > 0) {
+      const leakDiv = el('div', { class: 'leak-line dirty', text: `⚠ ${result.leaks.length} champ(s) suspect(s) détecté(s) :` });
+      const ul = el('ul', { class: 'leak-list' });
+      result.leaks.forEach((l) => ul.appendChild(el('li', { text: `${l.path} (${l.label})` })));
+      leakDiv.appendChild(ul);
+      detail.appendChild(leakDiv);
+    } else {
+      detail.appendChild(el('div', { class: 'leak-line clean', text: '✓ Aucune donnée privée détectée dans cette réponse.' }));
+    }
+  }
+
+  if (result.kind === 'http') {
+    const raw = el('details', { class: 'raw' }, [
+      el('summary', { text: 'Réponse brute' }),
+      el('pre', { text: result.rawText || '(corps vide)' }),
+    ]);
+    detail.appendChild(raw);
+  }
+
+  node.appendChild(detail);
+}
+
+function renderPending(test) {
+  const node = ensureTestNode(test);
+  node.innerHTML = '';
+  node.appendChild(el('div', { class: 'test-row' }, [
+    el('span', { class: 'test-name', text: test.name }),
+    el('span', { class: 'test-url', text: `${test.method} ${test.pathDescription}` }),
+    badge('pending', 'en cours…'),
+  ]));
+}
+
+function updateCounters() {
+  let ok = 0, ko = 0, info = 0;
+  Object.values(state.results).forEach((r) => {
+    if (r.verdictKind === 'pass') ok++;
+    else if (r.verdictKind === 'fail') ko++;
+    else if (r.verdictKind === 'info') info++;
+  });
+  document.getElementById('counterOk').textContent = `${ok} réussi(s)`;
+  document.getElementById('counterKo').textContent = `${ko} échoué(s)`;
+  document.getElementById('counterInfo').textContent = `${info} info`;
+  renderLeakRollup();
+}
+
+function renderLeakRollup() {
+  const box = document.getElementById('leakRollup');
+  const withLeakCheck = Object.entries(state.results).filter(([, r]) => r.leakChecked);
+  if (withLeakCheck.length === 0) {
+    box.textContent = 'Lance les tests pour voir le verdict par endpoint.';
+    return;
+  }
+  const dirty = withLeakCheck.filter(([, r]) => r.leaks && r.leaks.length > 0);
+  box.innerHTML = '';
+  if (dirty.length === 0) {
+    box.appendChild(el('div', { class: 'clean', text: `✓ Aucune donnée privée détectée sur ${withLeakCheck.length} endpoint(s) contrôlé(s).` }));
+  } else {
+    box.appendChild(el('div', { class: 'dirty', text: `⚠ Donnée(s) privée(s) potentielle(s) détectée(s) sur ${dirty.length}/${withLeakCheck.length} endpoint(s) :` }));
+    const ul = el('ul');
+    dirty.forEach(([id, r]) => {
+      const test = TESTS.find((t) => t.id === id);
+      ul.appendChild(el('li', { text: `${test ? test.name : id} — ${r.leaks.map((l) => `${l.path} (${l.label})`).join(', ')}` }));
+    });
+    box.appendChild(ul);
+  }
+}
+
+// =====================================================================
+// Valeurs dynamiques (jamais codées en dur — dérivées de vraies réponses)
+// =====================================================================
+
+async function getPillarsData() {
+  if (!state.cache.pillars) {
+    state.cache.pillars = (async () => {
+      const r = await httpCall('GET', '/public/pillars');
+      return r.kind === 'http' && Array.isArray(r.json) ? r.json : [];
+    })();
+  }
+  return state.cache.pillars;
+}
+async function getFormatsData() {
+  if (!state.cache.formats) {
+    state.cache.formats = (async () => {
+      const r = await httpCall('GET', '/public/formats');
+      return r.kind === 'http' && Array.isArray(r.json) ? r.json : [];
+    })();
+  }
+  return state.cache.formats;
+}
+async function getLanguagesData() {
+  if (!state.cache.languages) {
+    state.cache.languages = (async () => {
+      const r = await httpCall('GET', '/public/languages');
+      return r.kind === 'http' && Array.isArray(r.json) ? r.json : [];
+    })();
+  }
+  return state.cache.languages;
+}
+async function getCountriesData() {
+  if (!state.cache.countries) {
+    state.cache.countries = (async () => {
+      const r = await httpCall('GET', '/public/countries');
+      return r.kind === 'http' && Array.isArray(r.json) ? r.json : [];
+    })();
+  }
+  return state.cache.countries;
+}
+async function getFirstSpeakerSlug() {
+  if (!state.cache.firstSlug) {
+    state.cache.firstSlug = (async () => {
+      const r = await httpCall('GET', '/public/speakers?perPage=1');
+      const item = r.kind === 'http' && r.json && Array.isArray(r.json.data) ? r.json.data[0] : null;
+      return item ? item.slug : null;
+    })();
+  }
+  return state.cache.firstSlug;
+}
+
+// =====================================================================
+// Vérifications de forme (shape) — génériques, réutilisées par les tests
+// =====================================================================
+
+function isArrayOfObjects(json) {
+  return Array.isArray(json);
+}
+function isSpeakerListShape(json) {
+  return !!json && Array.isArray(json.data) && json.meta &&
+    typeof json.meta.total === 'number' &&
+    typeof json.meta.page === 'number' &&
+    typeof json.meta.perPage === 'number';
+}
+function isAckShape(json) {
+  return !!json && typeof json.reference === 'string' && typeof json.message === 'string';
+}
+function isAnalyticsAckShape(json) {
+  return !!json && json.accepted === true;
+}
+function isStandardErrorShape(json) {
+  return !!json && typeof json.statusCode === 'number' && 'message' in json && typeof json.error === 'string';
+}
+
+// =====================================================================
+// Payloads de test — toujours préfixés [TEST], toujours des emails uniques
+// =====================================================================
+
+function testSuffix() { return Date.now() + '-' + Math.floor(Math.random() * 1000); }
+
+function bookingConferencePayload() {
+  return {
+    serviceType: 'CONFERENCE',
+    fullName: '[TEST] Jane Smoke',
+    organization: '[TEST] Smoke Test Org',
+    workEmail: `smoke-${testSuffix()}+conference@example.com`,
+    eventName: '[TEST] Conference Smoke Event',
+    eventDate: '2027-01-15',
+    eventLocation: 'Dakar, Senegal',
+    eventFormat: 'In-Person',
+    audienceSize: '100-200',
+    primaryTopics: '[TEST] Leadership africain',
+    goals: '[TEST] Verification automatisee de la surface publique',
+    gdprConsent: true,
+  };
+}
+function bookingMasterclassPayload() {
+  return {
+    serviceType: 'MASTERCLASS',
+    fullName: '[TEST] Jane Smoke',
+    organization: '[TEST] Smoke Test Org',
+    workEmail: `smoke-${testSuffix()}+masterclass@example.com`,
+    eventName: '[TEST] Masterclass Smoke Event',
+    eventDate: '2027-02-10',
+    eventLocation: 'Virtual',
+    eventFormat: 'Virtual',
+    audienceSize: '20-50',
+    primaryTopics: '[TEST] Prise de parole en public',
+    goals: '[TEST] Verification automatisee de la surface publique',
+    gdprConsent: true,
+  };
+}
+function bookingWebinarPayload() {
+  return {
+    serviceType: 'WEBINAR',
+    fullName: '[TEST] Jane Smoke',
+    organization: '[TEST] Smoke Test Org',
+    workEmail: `smoke-${testSuffix()}+webinar@example.com`,
+    eventName: '[TEST] Webinar Smoke Event',
+    eventDate: '2027-03-05',
+    eventLocation: 'Online',
+    eventFormat: 'Virtual',
+    audienceSize: '50-100',
+    primaryTopics: '[TEST] Innovation',
+    goals: '[TEST] Verification automatisee de la surface publique',
+    gdprConsent: true,
+  };
+}
+function bookingAdvisoryPayload() {
+  return {
+    serviceType: 'ADVISORY',
+    fullName: '[TEST] Jane Smoke',
+    organization: '[TEST] Smoke Test Org',
+    workEmail: `smoke-${testSuffix()}+advisory@example.com`,
+    eventName: '[TEST] Advisory Smoke Engagement',
+    eventDate: '2027-04-01',
+    eventLocation: 'Abidjan',
+    eventFormat: 'One-off Session',
+    primaryTopics: '[TEST] Strategie',
+    goals: '[TEST] Verification automatisee de la surface publique',
+    gdprConsent: true,
+  };
+}
+function bookingOneToOnePayload() {
+  return {
+    serviceType: 'ONE_TO_ONE',
+    fullName: '[TEST] John Smoke',
+    organization: '[TEST] Smoke Test Org',
+    jobTitle: '[TEST] Aspiring Speaker',
+    workEmail: `smoke-${testSuffix()}+onetoone@example.com`,
+    websiteOrLinkedin: 'https://linkedin.com/in/smoke-test',
+    visitPurpose: 'ASPIRING_SPEAKER',
+    keyQuestions: '[TEST] Quelles sont les etapes pour rejoindre le roster ?',
+    preferredTime: 'Matin (UTC)',
+    gdprConsent: true,
+  };
+}
+function rosterApplicationPayload() {
+  return {
+    fullName: '[TEST] Amina Smoke',
+    organization: '[TEST] Smoke Test Org',
+    workEmail: `smoke-${testSuffix()}+roster@example.com`,
+    country: 'Senegal',
+    linkedinUrl: 'https://linkedin.com/in/smoke-test',
+    expertiseArea: '[TEST] Leadership',
+    keyTopics: '[TEST] Sujets de verification automatisee',
+    message: '[TEST] Candidature de verification automatisee — a supprimer.',
+    gdprConsent: true,
+  };
+}
+
+// =====================================================================
+// Définition des tests
+// =====================================================================
+// Chaque test : { id, group, name, method, pathDescription, run(ctx) }
+// `run` retourne un résultat normalisé (voir buildResult ci-dessous) déjà
+// stocké dans state.results et rendu ; `pathDescription` sert d'affichage
+// (peut différer de l'URL réellement appelée quand elle dépend d'une
+// valeur découverte dynamiquement, ex. un slug).
+
+function buildResult(httpRes, { expectFn, leakCheck }) {
+  if (httpRes.kind === 'network') {
+    return { kind: 'network', errorMessage: httpRes.errorMessage, elapsedMs: httpRes.elapsedMs, verdictKind: 'fail', verdictLabel: 'ÉCHEC RÉSEAU' };
+  }
+  const evaluation = expectFn(httpRes.json, httpRes.status);
+  const leaks = leakCheck && httpRes.json ? scanForbidden(httpRes.json) : null;
+  const verdictFailedByLeak = leakCheck && leaks && leaks.length > 0;
+  const verdictKind = evaluation.kind === 'info' ? 'info' : (evaluation.ok && !verdictFailedByLeak) ? 'pass' : 'fail';
+  const verdictLabel = verdictKind === 'pass' ? 'OK' : verdictKind === 'info' ? 'INFO' : 'ÉCHEC';
+  return {
+    kind: 'http',
+    status: httpRes.status,
+    elapsedMs: httpRes.elapsedMs,
+    json: httpRes.json,
+    rawText: httpRes.rawText,
+    reason: evaluation.reason,
+    verdictKind,
+    verdictLabel,
+    leakChecked: !!leakCheck,
+    leaks: leaks || [],
+  };
+}
+
+const TESTS = [];
+
+function defineTest(def) { TESTS.push(def); }
+
+// --- Taxonomies -------------------------------------------------------
+
+defineTest({
+  id: 'tax-pillars', group: 'taxonomies', name: 'Piliers', method: 'GET',
+  pathDescription: '/public/pillars',
+  params: 'aucun', responseShape: 'PublicPillarDto[] (id,name,slug,color,imageUrl,intro,problemStatement,valueProposition,themes[])',
+  async run() {
+    const r = await httpCall('GET', '/public/pillars');
+    state.cache.pillars = Promise.resolve(r.kind === 'http' && Array.isArray(r.json) ? r.json : []);
+    return buildResult(r, {
+      leakCheck: true,
+      expectFn: (json, status) => status === 200 && isArrayOfObjects(json)
+        ? { ok: true, reason: `${json.length} pilier(s) reçu(s).` }
+        : { ok: false, reason: `Statut ${status} ou forme inattendue (tableau attendu).` },
+    });
+  },
+});
+
+defineTest({
+  id: 'tax-formats', group: 'taxonomies', name: 'Formats', method: 'GET',
+  pathDescription: '/public/formats',
+  params: 'aucun', responseShape: 'PublicFormatRefDto[] (id,name,slug)',
+  async run() {
+    const r = await httpCall('GET', '/public/formats');
+    state.cache.formats = Promise.resolve(r.kind === 'http' && Array.isArray(r.json) ? r.json : []);
+    return buildResult(r, {
+      leakCheck: true,
+      expectFn: (json, status) => status === 200 && isArrayOfObjects(json)
+        ? { ok: true, reason: `${json.length} format(s) reçu(s).` }
+        : { ok: false, reason: `Statut ${status} ou forme inattendue.` },
+    });
+  },
+});
+
+defineTest({
+  id: 'tax-languages', group: 'taxonomies', name: 'Langues', method: 'GET',
+  pathDescription: '/public/languages',
+  params: 'aucun', responseShape: 'PublicLanguageRefDto[] (id,name,code)',
+  async run() {
+    const r = await httpCall('GET', '/public/languages');
+    state.cache.languages = Promise.resolve(r.kind === 'http' && Array.isArray(r.json) ? r.json : []);
+    return buildResult(r, {
+      leakCheck: true,
+      expectFn: (json, status) => status === 200 && isArrayOfObjects(json)
+        ? { ok: true, reason: `${json.length} langue(s) reçue(s).` }
+        : { ok: false, reason: `Statut ${status} ou forme inattendue.` },
+    });
+  },
+});
+
+defineTest({
+  id: 'tax-countries', group: 'taxonomies', name: 'Pays (avec ≥1 speaker publié)', method: 'GET',
+  pathDescription: '/public/countries',
+  params: 'aucun', responseShape: 'PublicCountryRefDto[] (id,name,iso2)',
+  async run() {
+    const r = await httpCall('GET', '/public/countries');
+    state.cache.countries = Promise.resolve(r.kind === 'http' && Array.isArray(r.json) ? r.json : []);
+    return buildResult(r, {
+      leakCheck: true,
+      expectFn: (json, status) => status === 200 && isArrayOfObjects(json)
+        ? { ok: true, reason: `${json.length} pays reçu(s).` }
+        : { ok: false, reason: `Statut ${status} ou forme inattendue.` },
+    });
+  },
+});
+
+// --- Speakers : lecture nue / pagination -------------------------------
+
+defineTest({
+  id: 'spk-list', group: 'speakers', name: 'Liste — appel nu', method: 'GET',
+  pathDescription: '/public/speakers',
+  params: 'aucun (valeurs par défaut : page=1, perPage=20)', responseShape: '{ data: PublicSpeakerListItemDto[], meta: {total,page,perPage} }',
+  async run() {
+    const r = await httpCall('GET', '/public/speakers');
+    return buildResult(r, {
+      leakCheck: true,
+      expectFn: (json, status) => status === 200 && isSpeakerListShape(json)
+        ? { ok: true, reason: `${json.data.length} speaker(s) sur ${json.meta.total} au total.` }
+        : { ok: false, reason: `Statut ${status} ou forme inattendue.` },
+    });
+  },
+});
+
+defineTest({
+  id: 'spk-list-page2', group: 'speakers', name: 'Liste — page 2', method: 'GET',
+  pathDescription: '/public/speakers?page=2',
+  params: 'page=2', responseShape: 'idem liste nue',
+  async run() {
+    const r = await httpCall('GET', '/public/speakers?page=2');
+    return buildResult(r, {
+      leakCheck: true,
+      expectFn: (json, status) => status === 200 && isSpeakerListShape(json)
+        ? { ok: true, reason: `page=${json.meta.page}, ${json.data.length} résultat(s).` }
+        : { ok: false, reason: `Statut ${status} ou forme inattendue.` },
+    });
+  },
+});
+
+defineTest({
+  id: 'spk-list-perpage', group: 'speakers', name: 'Liste — taille de page personnalisée', method: 'GET',
+  pathDescription: '/public/speakers?perPage=5',
+  params: 'perPage=5 (plafonné à 50 côté serveur)', responseShape: 'idem liste nue',
+  async run() {
+    const r = await httpCall('GET', '/public/speakers?perPage=5');
+    return buildResult(r, {
+      leakCheck: true,
+      expectFn: (json, status) => status === 200 && isSpeakerListShape(json) && json.meta.perPage === 5
+        ? { ok: true, reason: `perPage confirmé à ${json.meta.perPage}, ${json.data.length} résultat(s) reçu(s).` }
+        : { ok: false, reason: `Statut ${status} ou meta.perPage ≠ 5.` },
+    });
+  },
+});
+
+// --- Speakers : chaque filtre individuellement --------------------------
+
+function defineSpeakerFilterTest(id, name, paramLabel, buildQuery) {
+  defineTest({
+    id, group: 'speakers', name, method: 'GET',
+    pathDescription: `/public/speakers?${paramLabel}`,
+    params: paramLabel, responseShape: 'idem liste nue',
+    async run() {
+      const query = await buildQuery();
+      if (query === null) {
+        return { kind: 'skipped', verdictKind: 'info', verdictLabel: 'IGNORÉ',
+          reason: 'Aucune valeur exploitable trouvée dans les données actuelles pour construire ce filtre (taxonomie vide) — non un échec de l\'API.' };
+      }
+      const r = await httpCall('GET', `/public/speakers?${query}`);
+      return buildResult(r, {
+        leakCheck: true,
+        expectFn: (json, status) => status === 200 && isSpeakerListShape(json)
+          ? { ok: true, reason: `${json.data.length} résultat(s) sur ${json.meta.total} pour ${query} (0 résultat est normal si aucun speaker publié ne correspond).` }
+          : { ok: false, reason: `Statut ${status} ou forme inattendue.` },
+      });
+    },
+  });
+}
+
+defineSpeakerFilterTest('spk-filter-pillar', 'Filtre — pilier', 'pillar=<slug>', async () => {
+  const pillars = await getPillarsData();
+  return pillars[0] ? `pillar=${encodeURIComponent(pillars[0].slug)}` : null;
+});
+defineSpeakerFilterTest('spk-filter-theme', 'Filtre — thème', 'theme=<slug>', async () => {
+  const pillars = await getPillarsData();
+  const withTheme = pillars.find((p) => Array.isArray(p.themes) && p.themes.length > 0);
+  return withTheme ? `theme=${encodeURIComponent(withTheme.themes[0].slug)}` : null;
+});
+defineSpeakerFilterTest('spk-filter-format', 'Filtre — format', 'format=<slug>', async () => {
+  const formats = await getFormatsData();
+  return formats[0] ? `format=${encodeURIComponent(formats[0].slug)}` : null;
+});
+defineSpeakerFilterTest('spk-filter-country', 'Filtre — pays', 'country=<iso2>', async () => {
+  const countries = await getCountriesData();
+  return countries[0] ? `country=${encodeURIComponent(countries[0].iso2)}` : null;
+});
+defineSpeakerFilterTest('spk-filter-language', 'Filtre — langue', 'language=<code>', async () => {
+  const languages = await getLanguagesData();
+  return languages[0] ? `language=${encodeURIComponent(languages[0].code)}` : null;
+});
+defineSpeakerFilterTest('spk-filter-feetier', 'Filtre — niveau tarifaire', 'feeTier=TIER_1', async () => 'feeTier=TIER_1');
+defineSpeakerFilterTest('spk-filter-search', 'Filtre — recherche texte', 'q=a', async () => 'q=a');
+
+defineTest({
+  id: 'spk-filter-combo', group: 'speakers', name: 'Combinaison de 3 filtres', method: 'GET',
+  pathDescription: '/public/speakers?pillar=…&country=…&feeTier=TIER_1',
+  params: 'pillar + country + feeTier ensemble', responseShape: 'idem liste nue',
+  async run() {
+    const pillars = await getPillarsData();
+    const countries = await getCountriesData();
+    if (!pillars[0] || !countries[0]) {
+      return { kind: 'skipped', verdictKind: 'info', verdictLabel: 'IGNORÉ',
+        reason: 'Piliers ou pays indisponibles pour construire la combinaison.' };
+    }
+    const query = `pillar=${encodeURIComponent(pillars[0].slug)}&country=${encodeURIComponent(countries[0].iso2)}&feeTier=TIER_1`;
+    const r = await httpCall('GET', `/public/speakers?${query}`);
+    return buildResult(r, {
+      leakCheck: true,
+      expectFn: (json, status) => status === 200 && isSpeakerListShape(json)
+        ? { ok: true, reason: `${json.data.length} résultat(s) avec les 3 filtres combinés (0 est possible).` }
+        : { ok: false, reason: `Statut ${status} ou forme inattendue.` },
+    });
+  },
+});
+
+defineTest({
+  id: 'spk-sort', group: 'speakers', name: 'Options de tri', method: '—',
+  pathDescription: 'non applicable',
+  params: '—', responseShape: '—',
+  async run() {
+    return {
+      kind: 'skipped', verdictKind: 'info', verdictLabel: 'NON APPLICABLE',
+      reason: 'QueryPublicSpeakersDto n\'expose aucun paramètre de tri dans le code actuel (ordre fixe côté serveur : isTopRequested desc, isFeaturedHome desc, nom asc). Voir l\'avertissement en haut de page — signalé, pas inventé.',
+    };
+  },
+});
+
+defineTest({
+  id: 'spk-top-requested', group: 'speakers', name: 'Speakers les plus demandés', method: 'GET',
+  pathDescription: '/public/speakers/top-requested',
+  params: 'aucun', responseShape: 'PublicSpeakerListItemDto[]',
+  async run() {
+    const r = await httpCall('GET', '/public/speakers/top-requested');
+    return buildResult(r, {
+      leakCheck: true,
+      expectFn: (json, status) => status === 200 && isArrayOfObjects(json)
+        ? { ok: true, reason: `${json.length} speaker(s) top-requested reçu(s).` }
+        : { ok: false, reason: `Statut ${status} ou forme inattendue.` },
+    });
+  },
+});
+
+defineTest({
+  id: 'spk-editorial-lists', group: 'speakers', name: 'Listes éditoriales', method: '—',
+  pathDescription: 'non applicable',
+  params: '—', responseShape: '—',
+  async run() {
+    return {
+      kind: 'skipped', verdictKind: 'info', verdictLabel: 'NON APPLICABLE',
+      reason: 'Aucune route publique de listes éditoriales trouvée dans src/modules/public/ — seul le type d\'événement analytics CURATED_LIST_VIEW existe (trace la consultation d\'une liste qui vivrait ailleurs, probablement Phase 4/CMS). Signalé, pas inventé.',
+    };
+  },
+});
+
+defineTest({
+  id: 'spk-detail', group: 'speakers', name: 'Profil par slug', method: 'GET',
+  pathDescription: '/public/speakers/<slug réel de la liste>',
+  params: 'slug (path)', responseShape: 'PublicSpeakerDetailDto',
+  async run() {
+    const slug = await getFirstSpeakerSlug();
+    if (!slug) {
+      return { kind: 'skipped', verdictKind: 'info', verdictLabel: 'IGNORÉ',
+        reason: 'Aucun speaker publié trouvé dans la liste — impossible de récupérer un slug réel.' };
+    }
+    const r = await httpCall('GET', `/public/speakers/${encodeURIComponent(slug)}`);
+    return buildResult(r, {
+      leakCheck: true,
+      expectFn: (json, status) => status === 200 && json && json.slug === slug
+        ? { ok: true, reason: `Profil de "${json.displayName}" (slug=${slug}) reçu.` }
+        : { ok: false, reason: `Statut ${status} ou slug ne correspond pas.` },
+    });
+  },
+});
+
+// --- Écriture -----------------------------------------------------------
+
+function defineBookingTest(id, name, payloadFn) {
+  defineTest({
+    id, group: 'write', name, method: 'POST',
+    pathDescription: '/public/booking-requests',
+    params: 'body: CreateBookingRequestDto (voir payload ci-dessous)', responseShape: '{ reference, message }',
+    async run() {
+      const payload = payloadFn();
+      const r = await httpCall('POST', '/public/booking-requests', payload);
+      return buildResult(r, {
+        leakCheck: true,
+        expectFn: (json, status) => status === 201 && isAckShape(json)
+          ? { ok: true, reason: `Créé : référence ${json.reference}. Préfixé [TEST] — à nettoyer côté back-office.` }
+          : { ok: false, reason: `Statut ${status} attendu 201, ou forme inattendue.` },
+      });
+    },
+  });
+}
+defineBookingTest('write-conference', 'Demande — CONFERENCE', bookingConferencePayload);
+defineBookingTest('write-masterclass', 'Demande — MASTERCLASS', bookingMasterclassPayload);
+defineBookingTest('write-webinar', 'Demande — WEBINAR', bookingWebinarPayload);
+defineBookingTest('write-advisory', 'Demande — ADVISORY', bookingAdvisoryPayload);
+defineBookingTest('write-onetoone', 'Demande — ONE_TO_ONE', bookingOneToOnePayload);
+
+defineTest({
+  id: 'write-roster', group: 'write', name: 'Candidature au roster', method: 'POST',
+  pathDescription: '/public/roster-applications',
+  params: 'body: CreateRosterApplicationDto', responseShape: '{ reference, message }',
+  async run() {
+    const r = await httpCall('POST', '/public/roster-applications', rosterApplicationPayload());
+    return buildResult(r, {
+      leakCheck: true,
+      expectFn: (json, status) => status === 201 && isAckShape(json)
+        ? { ok: true, reason: `Créée : référence ${json.reference}. Préfixée [TEST] — à nettoyer.` }
+        : { ok: false, reason: `Statut ${status} attendu 201, ou forme inattendue.` },
+    });
+  },
+});
+
+defineTest({
+  id: 'write-analytics', group: 'write', name: 'Événement analytics — Check Availability', method: 'POST',
+  pathDescription: '/public/analytics/events',
+  params: 'body: { type: "CHECK_AVAILABILITY_CLICK" } (speakerId omis : non exposé publiquement, voir note)', responseShape: '{ accepted: true }',
+  async run() {
+    // speakerId est optionnel dans CreateAnalyticsEventDto : on ne l'envoie
+    // pas, car l'API publique n'expose JAMAIS l'id numérique d'un speaker
+    // (seulement son slug) — deviner un id serait tester autre chose que ce
+    // qu'un vrai site public peut réellement envoyer.
+    const r = await httpCall('POST', '/public/analytics/events', { type: 'CHECK_AVAILABILITY_CLICK' });
+    return buildResult(r, {
+      leakCheck: true,
+      expectFn: (json, status) => status === 202 && isAnalyticsAckShape(json)
+        ? { ok: true, reason: 'Accepté (202) — écriture en fire-and-forget, jamais garantie de manière synchrone.' }
+        : { ok: false, reason: `Statut ${status} attendu 202, ou forme inattendue.` },
+    });
+  },
+});
+
+// --- Gestion des erreurs --------------------------------------------------
+
+defineTest({
+  id: 'err-404', group: 'errors', name: 'Slug inexistant → 404', method: 'GET',
+  pathDescription: '/public/speakers/<slug-bidon>',
+  params: 'slug bidon garanti inexistant', responseShape: '{ statusCode, message, error } — format standard',
+  async run() {
+    const r = await httpCall('GET', `/public/speakers/ce-slug-n-existe-pas-${testSuffix()}`);
+    return buildResult(r, {
+      leakCheck: true,
+      expectFn: (json, status) => status === 404 && isStandardErrorShape(json)
+        ? { ok: true, reason: `404 reçu au format standard : "${json.message}".` }
+        : { ok: false, reason: `Statut ${status} (attendu 404) ou forme d'erreur non standard.` },
+    });
+  },
+});
+
+defineTest({
+  id: 'err-400', group: 'errors', name: 'Payload invalide → 400', method: 'POST',
+  pathDescription: '/public/booking-requests (email malformé, eventName manquant, gdprConsent absent)',
+  params: 'payload volontairement invalide', responseShape: '{ statusCode, message: string[], error }',
+  async run() {
+    const invalid = {
+      serviceType: 'CONFERENCE',
+      fullName: '[TEST] Invalid Payload',
+      organization: '[TEST] Smoke Test Org',
+      workEmail: 'ceci-nest-pas-un-email',
+      // eventName volontairement omis (requis pour CONFERENCE)
+      eventDate: '2027-01-15',
+      eventLocation: 'Dakar',
+      eventFormat: 'In-Person',
+      audienceSize: '100-200',
+      primaryTopics: '[TEST] x',
+      goals: '[TEST] x',
+      // gdprConsent volontairement omis
+    };
+    const r = await httpCall('POST', '/public/booking-requests', invalid);
+    return buildResult(r, {
+      leakCheck: true,
+      expectFn: (json, status) => {
+        if (status !== 400 || !isStandardErrorShape(json)) {
+          return { ok: false, reason: `Statut ${status} (attendu 400) ou forme d'erreur non standard.` };
+        }
+        const messages = Array.isArray(json.message) ? json.message : [json.message];
+        const mentionsField = messages.some((m) => /eventName|workEmail|gdprConsent|email/i.test(m));
+        return mentionsField
+          ? { ok: true, reason: `400 reçu, ${messages.length} message(s) — au moins un identifie clairement le champ en cause.` }
+          : { ok: false, reason: '400 reçu mais aucun message ne semble désigner un champ précis.' };
+      },
+    });
+  },
+});
+
+defineTest({
+  id: 'err-ratelimit', group: 'errors', name: 'Deux envois rapprochés — comportement du rate-limit', method: 'POST ×2',
+  pathDescription: '/public/booking-requests (deux appels sans délai)',
+  params: 'deux CreateBookingRequestDto valides, envoyés dos-à-dos', responseShape: 'un statut par appel — informationnel',
+  async run() {
+    const [r1, r2] = await Promise.all([
+      httpCall('POST', '/public/booking-requests', bookingConferencePayload()),
+      httpCall('POST', '/public/booking-requests', bookingConferencePayload()),
+    ]);
+    const statuses = [r1, r2].map((r) => r.kind === 'http' ? r.status : 'réseau');
+    const anyThrottled = statuses.includes(429);
+    return {
+      kind: 'http',
+      status: statuses.join(' / '),
+      elapsedMs: Math.max(r1.elapsedMs || 0, r2.elapsedMs || 0),
+      json: { appel1: r1.json, appel2: r2.json },
+      rawText: JSON.stringify({ appel1: r1.json, appel2: r2.json }, null, 2),
+      reason: anyThrottled
+        ? `Un des deux appels a été limité (429) — le rate-limit (20/min sur cette route) réagit dès 2 requêtes rapprochées dans la fenêtre courante.`
+        : `Les deux appels sont passés (statuts : ${statuses.join(', ')}) — normal, la limite est de 20/min sur cette route : 2 appels seuls ne la déclenchent généralement pas. Relance ce test plusieurs fois de suite pour observer le 429.`,
+      verdictKind: 'info',
+      verdictLabel: 'INFO',
+      leakChecked: false,
+      leaks: [],
+    };
+  },
+});
+
+// =====================================================================
+// Exécution
+// =====================================================================
+
+async function runSingle(test) {
+  renderPending(test);
+  let result;
+  try {
+    result = await test.run();
+  } catch (err) {
+    result = { kind: 'network', errorMessage: 'Exception JS inattendue : ' + (err && err.message), verdictKind: 'fail', verdictLabel: 'ERREUR OUTIL' };
+  }
+  state.results[test.id] = result;
+  renderTest(test, result);
+  updateCounters();
+  return result;
+}
+
+async function runAll() {
+  document.getElementById('runAllBtn').disabled = true;
+  state.cache = {}; // repart d'une base fraîche à chaque "Tout lancer"
+  for (const test of TESTS) {
+    await runSingle(test);
+  }
+  document.getElementById('runAllBtn').disabled = false;
+}
+
+// =====================================================================
+// Rapport copiable
+// =====================================================================
+
+function shapeDescriptor(json, depth) {
+  if (depth === undefined) depth = 0;
+  if (json === null || json === undefined) return String(json);
+  if (Array.isArray(json)) {
+    if (json.length === 0) return '[]';
+    return `[ ${shapeDescriptor(json[0], depth + 1)}, … ]`;
+  }
+  if (typeof json === 'object') {
+    if (depth >= 2) return '{ … }';
+    const keys = Object.keys(json);
+    return `{ ${keys.join(', ')} }`;
+  }
+  return typeof json;
+}
+
+function buildReportText() {
+  const lines = [];
+  lines.push('Africa Speakers Bureau — Rapport de test de la surface publique de l\'API');
+  lines.push(`URL de base testée : ${baseUrl()}`);
+  lines.push(`Généré le : ${new Date().toISOString()}`);
+  lines.push('');
+  let currentGroup = null;
+  for (const test of TESTS) {
+    if (test.group !== currentGroup) {
+      currentGroup = test.group;
+      lines.push(`--- ${currentGroup.toUpperCase()} ---`);
+    }
+    const result = state.results[test.id];
+    lines.push(`\n${test.name}`);
+    lines.push(`  ${test.method} ${test.pathDescription}`);
+    lines.push(`  Paramètres : ${test.params}`);
+    lines.push(`  Forme de réponse attendue : ${test.responseShape}`);
+    if (!result) {
+      lines.push('  (non exécuté)');
+      continue;
+    }
+    lines.push(`  Statut observé : ${result.status !== undefined ? result.status : '(échec réseau)'}`);
+    lines.push(`  Verdict : ${result.verdictLabel}${result.reason ? ' — ' + result.reason : ''}`);
+    if (result.leakChecked) {
+      lines.push(`  Étanchéité : ${result.leaks && result.leaks.length ? 'DONNÉES SUSPECTES : ' + result.leaks.map((l) => l.path).join(', ') : 'aucune donnée privée détectée'}`);
+    }
+    if (result.json !== undefined && result.json !== null) {
+      lines.push(`  Forme réelle observée : ${shapeDescriptor(result.json)}`);
+    }
+  }
+  return lines.join('\n');
+}
+
+document.getElementById('copyReportBtn').addEventListener('click', async () => {
+  const text = buildReportText();
+  try {
+    await navigator.clipboard.writeText(text);
+    const fb = document.getElementById('copyFeedback');
+    fb.textContent = 'Copié !';
+    setTimeout(() => { fb.textContent = ''; }, 2000);
+  } catch (err) {
+    alert('Copie automatique impossible (permissions du navigateur). Rapport :\n\n' + text);
+  }
+});
+
+document.getElementById('runAllBtn').addEventListener('click', runAll);
+
+// Rendu initial (état "pas encore lancé") pour que la page ne soit pas vide.
+TESTS.forEach((t) => {
+  const node = ensureTestNode(t);
+  node.appendChild(el('div', { class: 'test-row' }, [
+    el('span', { class: 'test-name', text: t.name }),
+    el('span', { class: 'test-url', text: `${t.method} ${t.pathDescription}` }),
+    badge('pending', 'pas encore lancé'),
+    el('span', { class: 'test-actions' }, [
+      el('button', { class: 'small', text: 'Lancer', onclick: () => runSingle(t) }),
+    ]),
+  ]));
+});
+
+</script>
+</body>
+</html>

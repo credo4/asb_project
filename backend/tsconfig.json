@@ -1,0 +1,27 @@
+{
+  "compilerOptions": {
+    "module": "nodenext",
+    "moduleResolution": "nodenext",
+    "resolvePackageJsonExports": true,
+    "esModuleInterop": true,
+    "isolatedModules": true,
+    "declaration": true,
+    "removeComments": true,
+    "emitDecoratorMetadata": true,
+    "experimentalDecorators": true,
+    "allowSyntheticDefaultImports": true,
+    "target": "ES2023",
+    "sourceMap": true,
+    "outDir": "./dist",
+    "baseUrl": "./",
+    "skipLibCheck": true,
+    "strict": true,
+    "forceConsistentCasingInFileNames": true,
+    "noFallthroughCasesInSwitch": true
+  },
+  // `tools/` (banc de test navigateur, HTML+JS vanilla autonome — voir
+  // tools/api-smoke-test/README.md) n'a aucun fichier .ts et ne serait donc
+  // jamais ramassé de toute façon, mais exclu explicitement : ce dossier
+  // jetable ne doit jamais faire partie du projet TypeScript compilé.
+  "exclude": ["node_modules", "dist", "tools"]
+}
