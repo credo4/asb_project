@@ -10,12 +10,14 @@ import {
   BookingStatus,
   Prisma,
   Role,
+  ServiceType,
 } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
 import { ActivityLogService } from '../../activity-log/activity-log.service';
 import { MailService } from '../../mail/mail.service';
 import { EmailDeliveriesService } from '../../mail/email-deliveries.service';
 import { ClientLinkingService } from '../clients/client-linking.service';
+import { AppSettingsService } from '../app-settings/app-settings.service';
 import { AuthenticatedUser } from '../../common/types/authenticated-user.interface';
 import {
   sanitizeOptionalText,
@@ -79,7 +81,20 @@ export class BookingRequestsService {
     private readonly emailDeliveries: EmailDeliveriesService,
     private readonly config: ConfigService,
     private readonly clientLinking: ClientLinkingService,
+    private readonly appSettings: AppSettingsService,
   ) {}
+
+  // §A4 — RESPONSE_SLA_BUSINESS_DAYS reste la source pour les 5 types de
+  // service existants (décision produit explicite, voir CLAUDE.md) ; le
+  // délai configuré dans app_settings ne sert QUE de repli pour un futur
+  // type de service qui n'y figurerait pas encore — jamais interrogé pour
+  // les 5 types actuels (court-circuit synchrone, pas de round-trip DB).
+  private async resolveSlaDays(serviceType: ServiceType): Promise<number> {
+    const configured = RESPONSE_SLA_BUSINESS_DAYS[serviceType];
+    if (configured !== undefined) return configured;
+    const settings = await this.appSettings.getEffectiveSettings();
+    return settings.responseSlaBusinessDays;
+  }
 
   // ---------------------------------------------------------------------
   // Ingestion publique (POST /public/booking-requests)
@@ -109,15 +124,17 @@ export class BookingRequestsService {
       );
     }
 
+    // Hors transaction (lecture seule, sans lien avec `tx`) : évite de
+    // garder la transaction ouverte pour l'improbable repli app_settings
+    // (voir resolveSlaDays).
+    const slaDays = await this.resolveSlaDays(dto.serviceType);
+
     const created = await this.prisma.$transaction(async (tx) => {
       const requestedSpeakerId = await this.resolveRequestedSpeakerId(
         tx,
         dto.requestedSpeakerId,
       );
-      const responseDueAt = addBusinessDays(
-        new Date(),
-        RESPONSE_SLA_BUSINESS_DAYS[dto.serviceType],
-      );
+      const responseDueAt = addBusinessDays(new Date(), slaDays);
       // §A3 — rattachement automatique par email exact normalisé, SANS
       // création : un email inconnu ne doit produire AUCUNE fiche contact
       // (voir ClientLinkingService#resolveAutoLink).
@@ -177,6 +194,8 @@ export class BookingRequestsService {
     dto: CreateManualBookingRequestDto,
     actor: AuthenticatedUser,
   ): Promise<BookingRequestDetailDto> {
+    const slaDays = await this.resolveSlaDays(dto.serviceType);
+
     const created = await this.prisma.$transaction(async (tx) => {
       const requestedSpeakerId = await this.resolveRequestedSpeakerId(
         tx,
@@ -185,10 +204,7 @@ export class BookingRequestsService {
       if (dto.assignedAdminId !== undefined) {
         await this.assertAdminExists(tx, dto.assignedAdminId);
       }
-      const responseDueAt = addBusinessDays(
-        new Date(),
-        RESPONSE_SLA_BUSINESS_DAYS[dto.serviceType],
-      );
+      const responseDueAt = addBusinessDays(new Date(), slaDays);
       const autoLink = await this.clientLinking.resolveAutoLink(
         tx,
         dto.workEmail,
@@ -367,7 +383,9 @@ export class BookingRequestsService {
   private async sendNotifications(
     bookingRequest: BookingRequestRow,
   ): Promise<void> {
-    const teamEmail = this.config.get<string>('ASB_TEAM_EMAIL');
+    // §A4 — app_settings.teamEmail d'abord, ASB_TEAM_EMAIL (.env) en repli
+    // (voir AppSettingsService#getEffectiveSettings).
+    const teamEmail = (await this.appSettings.getEffectiveSettings()).teamEmail;
     const frontendUrl = this.config.get<string>('FRONTEND_URL');
 
     if (teamEmail) {
@@ -393,7 +411,7 @@ export class BookingRequestsService {
       }
     } else {
       this.logger.warn(
-        'ASB_TEAM_EMAIL absent : notification interne non envoyée.',
+        "Email d'équipe absent (ni app_settings.teamEmail, ni ASB_TEAM_EMAIL) : notification interne non envoyée.",
       );
     }
 
@@ -628,8 +646,16 @@ export class BookingRequestsService {
         newValue: { status: bookingRequest.status, comment: dto.comment },
       });
 
-      // §1 — point d'extension pour la Phase 3e (création de mission) :
-      // CONFIRMED est le statut qui la déclenchera. Rien à faire aujourd'hui.
+      // §1 — CONFIRMED reste le signal identifiable pour la création de
+      // mission, mais volontairement PAS câblé automatiquement ici : la
+      // Phase 3e (missions), une fois écrite, a explicitement exigé une
+      // action ADMIN EXPLICITE (POST /admin/booking-requests/:id/missions),
+      // "jamais un effet de bord automatique d'un changement de statut" —
+      // créer une mission dans CE hook aurait été exactement le second
+      // chemin que ce commentaire avait pour but d'éviter. Le hook reste un
+      // point d'extension délibérément no-op (utile si un futur besoin
+      // ATTENDU comme effet de bord automatique de CONFIRMED apparaît un
+      // jour — aucun aujourd'hui), pas un déclencheur de mission.
       if (dto.status === BookingStatus.CONFIRMED) {
         await this.onConfirmed(bookingRequest, tx);
       }
@@ -638,12 +664,9 @@ export class BookingRequestsService {
     return this.findOne(id);
   }
 
-  // Hook d'extension Phase 3e — volontairement vide. Quand les missions
-  // seront construites, c'est ICI (et nulle part ailleurs) qu'on ajoutera la
-  // création de la mission liée, sans avoir à retoucher la logique de
-  // transition de statut ci-dessus. Signature déjà correcte pour cet usage
-  // futur (la ligne mise à jour + le client de transaction en cours) — les
-  // deux paramètres ne servent à rien tant que le corps reste un no-op.
+  // Volontairement vide — voir le commentaire ci-dessus. MissionsService#create
+  // est le SEUL chemin de création de mission (§1, Phase 3e), déclenché par
+  // une action admin explicite, jamais par ce hook.
   /* eslint-disable @typescript-eslint/no-unused-vars */
   private async onConfirmed(
     bookingRequest: { id: number },

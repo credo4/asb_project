@@ -18,13 +18,18 @@ type TemplateName =
   | 'roster-application-info-requested'
   | 'roster-application-rejected'
   | 'roster-application-invitation'
+  | 'admin-user-invitation'
   | 'speaker-revision-team-notification'
   | 'speaker-revision-approved'
   | 'speaker-revision-changes-requested'
   | 'speaker-revision-rejected'
   | 'availability-request-notification'
   | 'availability-response-notification'
-  | 'availability-request-expired';
+  | 'availability-request-expired'
+  | 'mission-created-notification'
+  | 'mission-confirmed-notification'
+  | 'mission-accepted-notification'
+  | 'mission-document-deposited-notification';
 
 // `relatedEntityId` est optionnel PARTOUT (voir sendAndLog) : certains
 // appels n'ont simplement rien à lier (ex. vérification d'email, avant
@@ -100,6 +105,16 @@ export interface RosterApplicationInvitationInput extends RelatableInput {
   invitationUrl: string;
 }
 
+// Paramètres §28, Utilisateurs — même mécanisme de token d'invitation que
+// RosterApplicationInvitationInput (Phase 3c), gabarit distinct (destiné à
+// un futur membre de l'équipe, pas à un candidat speaker).
+export interface AdminUserInvitationInput extends RelatableInput {
+  to: string;
+  firstName: string;
+  roleLabel: string;
+  invitationUrl: string;
+}
+
 export interface SpeakerRevisionTeamNotificationInput extends RelatableInput {
   to: string;
   speakerName: string;
@@ -139,6 +154,32 @@ export interface AvailabilityResponseNotificationInput extends RelatableInput {
 
 export interface AvailabilityRequestExpiredInput extends RelatableInput {
   to: string;
+  backOfficeUrl: string;
+}
+
+// Phase 3e — missions (§9).
+export interface MissionCreatedNotificationInput extends RelatableInput {
+  to: string;
+  reference: string;
+  missionUrl: string;
+}
+
+export interface MissionConfirmedNotificationInput extends RelatableInput {
+  to: string;
+  reference: string;
+  missionUrl: string;
+}
+
+export interface MissionAcceptedNotificationInput extends RelatableInput {
+  to: string;
+  reference: string;
+  backOfficeUrl: string;
+}
+
+export interface MissionDocumentDepositedNotificationInput extends RelatableInput {
+  to: string;
+  reference: string;
+  documentType: string;
   backOfficeUrl: string;
 }
 
@@ -403,6 +444,26 @@ export class MailService {
     this.logger.log(`Email d'invitation envoyé à ${input.to}`);
   }
 
+  async sendAdminUserInvitation(
+    input: AdminUserInvitationInput,
+  ): Promise<void> {
+    const html = this.render('admin-user-invitation', {
+      firstName: input.firstName,
+      roleLabel: input.roleLabel,
+      invitationUrl: input.invitationUrl,
+    });
+    const subject = 'Invitation au back-office — Africa Speakers Bureau';
+    await this.sendAndLog({
+      template: 'admin-user-invitation',
+      to: input.to,
+      subject,
+      html,
+      relatedEntityType: 'User',
+      relatedEntityId: input.relatedEntityId,
+    });
+    this.logger.log(`Email d'invitation admin envoyé à ${input.to}`);
+  }
+
   async sendSpeakerRevisionTeamNotification(
     input: SpeakerRevisionTeamNotificationInput,
   ): Promise<void> {
@@ -548,6 +609,90 @@ export class MailService {
       relatedEntityId: input.relatedEntityId,
     });
     this.logger.log(`Email d'expiration envoyé à ${input.to}`);
+  }
+
+  // Phase 3e, §9 — au speaker, à la création de sa mission.
+  async sendMissionCreatedNotification(
+    input: MissionCreatedNotificationInput,
+  ): Promise<void> {
+    const html = this.render('mission-created-notification', {
+      reference: input.reference,
+      missionUrl: input.missionUrl,
+    });
+    const subject = `Nouvelle mission [${input.reference}] — Africa Speakers Bureau`;
+    await this.sendAndLog({
+      template: 'mission-created-notification',
+      to: input.to,
+      subject,
+      html,
+      relatedEntityType: 'Mission',
+      relatedEntityId: input.relatedEntityId,
+    });
+    this.logger.log(`Email de création de mission envoyé à ${input.to}`);
+  }
+
+  // Phase 3e, §9 — au speaker, au passage de sa mission en CONFIRMED.
+  async sendMissionConfirmedNotification(
+    input: MissionConfirmedNotificationInput,
+  ): Promise<void> {
+    const html = this.render('mission-confirmed-notification', {
+      reference: input.reference,
+      missionUrl: input.missionUrl,
+    });
+    const subject = `Mission confirmée [${input.reference}] — Africa Speakers Bureau`;
+    await this.sendAndLog({
+      template: 'mission-confirmed-notification',
+      to: input.to,
+      subject,
+      html,
+      relatedEntityType: 'Mission',
+      relatedEntityId: input.relatedEntityId,
+    });
+    this.logger.log(`Email de confirmation de mission envoyé à ${input.to}`);
+  }
+
+  // Phase 3e, §9 — à l'équipe, à l'acceptation définitive par le speaker.
+  async sendMissionAcceptedNotification(
+    input: MissionAcceptedNotificationInput,
+  ): Promise<void> {
+    const html = this.render('mission-accepted-notification', {
+      reference: input.reference,
+      backOfficeUrl: input.backOfficeUrl,
+    });
+    const subject = `Mission acceptée par le speaker [${input.reference}] — Africa Speakers Bureau`;
+    await this.sendAndLog({
+      template: 'mission-accepted-notification',
+      to: input.to,
+      subject,
+      html,
+      relatedEntityType: 'Mission',
+      relatedEntityId: input.relatedEntityId,
+    });
+    this.logger.log(`Email d'acceptation de mission envoyé à ${input.to}`);
+  }
+
+  // Phase 3e, §9 — à l'équipe, au dépôt d'un document (par le speaker ou
+  // l'admin — voir MissionDocumentsService, seul l'appel côté speaker
+  // déclenche cette notification, un admin sait déjà ce qu'il vient de
+  // déposer).
+  async sendMissionDocumentDepositedNotification(
+    input: MissionDocumentDepositedNotificationInput,
+  ): Promise<void> {
+    const html = this.render('mission-document-deposited-notification', {
+      reference: input.reference,
+      documentType: input.documentType,
+      backOfficeUrl: input.backOfficeUrl,
+    });
+    const subject = `Document déposé [${input.reference}] — Africa Speakers Bureau`;
+    await this.sendAndLog({
+      template: 'mission-document-deposited-notification',
+      to: input.to,
+      subject,
+      html,
+      relatedEntityType: 'Mission',
+      relatedEntityId: input.relatedEntityId,
+    });
+    this.logger.log(`Email de dépôt de document envoyé à ${input.to}`);
   }
 
   // Consolidation, Partie E — POINT UNIQUE par lequel TOUT envoi de ce

@@ -1,6 +1,17 @@
 import { ApiPropertyOptional } from '@nestjs/swagger';
-import { Type } from 'class-transformer';
+import { Transform } from 'class-transformer';
 import { IsBoolean, IsDateString, IsOptional, IsString } from 'class-validator';
+
+// Un query param booléen arrive toujours en string ("true"/"false") :
+// `@Type(() => Boolean)` convertirait n'importe quelle chaîne non vide (y
+// compris "false") en `true` — corrigé ici après l'avoir constaté en
+// pratique sur le même piège dans le module missions (Phase 3e), voir
+// query-missions.dto.ts pour le même `toBoolean` local.
+const toBoolean = ({ value }: { value: unknown }): unknown => {
+  if (value === 'true') return true;
+  if (value === 'false') return false;
+  return value;
+};
 
 // Phase 3d, §1 — recherche ASSISTÉE, pas un algorithme : ces critères sont
 // pré-remplis depuis la demande par le SERVICE (voir MatchingService),
@@ -62,7 +73,7 @@ export class QueryMatchingCandidatesDto {
 
   @ApiPropertyOptional({ default: false })
   @IsOptional()
-  @Type(() => Boolean)
+  @Transform(toBoolean)
   @IsBoolean()
   isVirtual?: boolean;
 
@@ -72,7 +83,7 @@ export class QueryMatchingCandidatesDto {
       "Inclure les speakers non PUBLISHED (l'équipe peut vouloir proposer un profil en cours de validation).",
   })
   @IsOptional()
-  @Type(() => Boolean)
+  @Transform(toBoolean)
   @IsBoolean()
   includeUnpublished?: boolean;
 }

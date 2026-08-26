@@ -12,6 +12,7 @@ import { StorageModule } from './storage/storage.module';
 import { MediaModule } from './modules/media/media.module';
 import { ActivityLogModule } from './activity-log/activity-log.module';
 import { SpeakersModule } from './modules/speakers/speakers.module';
+import { TaxonomiesModule } from './modules/taxonomies/taxonomies.module';
 import { BookingRequestsModule } from './modules/booking-requests/booking-requests.module';
 import { RosterApplicationsModule } from './modules/roster-applications/roster-applications.module';
 import { SpeakerRevisionsModule } from './modules/speaker-revisions/speaker-revisions.module';
@@ -22,7 +23,12 @@ import { ClientsModule } from './modules/clients/clients.module';
 import { AnalyticsModule } from './modules/analytics/analytics.module';
 import { CuratedListsModule } from './modules/curated-lists/curated-lists.module';
 import { AvailabilityRequestsModule } from './modules/availability-requests/availability-requests.module';
+import { MissionsModule } from './modules/missions/missions.module';
 import { PublicModule } from './modules/public/public.module';
+import { UsersModule } from './modules/users/users.module';
+import { LoginEventsModule } from './modules/login-events/login-events.module';
+import { AppSettingsModule } from './modules/app-settings/app-settings.module';
+import { ReportsModule } from './modules/reports/reports.module';
 import { resolveStorageRoot } from './storage/resolve-storage-root';
 import { JwtAuthGuard } from './common/guards/jwt-auth.guard';
 import { RolesGuard } from './common/guards/roles.guard';
@@ -69,6 +75,7 @@ import { RolesGuard } from './common/guards/roles.guard';
     MediaModule,
     ActivityLogModule,
     SpeakersModule,
+    TaxonomiesModule,
     BookingRequestsModule,
     RosterApplicationsModule,
     SpeakerRevisionsModule,
@@ -79,7 +86,12 @@ import { RolesGuard } from './common/guards/roles.guard';
     AnalyticsModule,
     CuratedListsModule,
     AvailabilityRequestsModule,
+    MissionsModule,
     PublicModule,
+    UsersModule,
+    LoginEventsModule,
+    AppSettingsModule,
+    ReportsModule,
   ],
   providers: [
     // Ordre d'exécution des guards globaux : Throttler -> Jwt -> Roles.

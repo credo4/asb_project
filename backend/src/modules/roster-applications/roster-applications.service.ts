@@ -25,6 +25,7 @@ import {
   BCRYPT_COST_FACTOR,
   TokenPair,
 } from '../auth/auth.service';
+import { AppSettingsService } from '../app-settings/app-settings.service';
 import { AuthenticatedUser } from '../../common/types/authenticated-user.interface';
 import {
   sanitizeOptionalText,
@@ -34,7 +35,6 @@ import { createWithUniqueReference } from '../../common/utils/reference-generato
 import { resolveUniqueSlug } from '../speakers/slug.util';
 import {
   CONVERSION_TRANSACTION_TIMEOUT_MS,
-  CURRENT_TERMS_VERSION,
   DEFAULT_INVITATION_TOKEN_TTL_DAYS,
 } from './roster-application.constants';
 import {
@@ -84,6 +84,7 @@ export class RosterApplicationsService {
     private readonly emailDeliveries: EmailDeliveriesService,
     private readonly config: ConfigService,
     private readonly authService: AuthService,
+    private readonly appSettings: AppSettingsService,
   ) {}
 
   // ---------------------------------------------------------------------
@@ -162,7 +163,7 @@ export class RosterApplicationsService {
   private async sendNotifications(
     application: RosterApplicationRow,
   ): Promise<void> {
-    const teamEmail = this.config.get<string>('ASB_TEAM_EMAIL');
+    const teamEmail = (await this.appSettings.getEffectiveSettings()).teamEmail;
     const frontendUrl = this.config.get<string>('FRONTEND_URL');
 
     if (teamEmail) {
@@ -185,7 +186,7 @@ export class RosterApplicationsService {
       }
     } else {
       this.logger.warn(
-        'ASB_TEAM_EMAIL absent : notification interne non envoyée.',
+        "Email d'équipe absent (ni app_settings.teamEmail, ni ASB_TEAM_EMAIL) : notification interne non envoyée.",
       );
     }
 
@@ -1192,6 +1193,11 @@ export class RosterApplicationsService {
   }
 
   // POST /auth/accept-invitation (public — voir InvitationAcceptController).
+  // Générique — voir CLAUDE.md/InvitationAcceptController : ne lit RIEN de
+  // spécifique à une candidature, active n'importe quel `User` pointé par le
+  // token. Réutilisé tel quel par le module Utilisateurs (§28, invitation
+  // d'un membre de l'équipe) — même endpoint POST /auth/accept-invitation
+  // pour les deux origines.
   async acceptInvitation(dto: AcceptInvitationDto): Promise<TokenPair> {
     const record = await this.prisma.invitationToken.findUnique({
       where: { token: dto.token },
@@ -1208,6 +1214,10 @@ export class RosterApplicationsService {
     }
 
     const passwordHash = await bcrypt.hash(dto.password, BCRYPT_COST_FACTOR);
+    // §A4 — app_settings.collaborationTermsVersion d'abord, CURRENT_TERMS_VERSION
+    // en repli (voir AppSettingsService#getEffectiveSettings).
+    const termsVersion = (await this.appSettings.getEffectiveSettings())
+      .collaborationTermsVersion;
 
     const user = await this.prisma.$transaction(async (tx) => {
       await tx.invitationToken.update({
@@ -1222,7 +1232,7 @@ export class RosterApplicationsService {
           // L'accès au lien prouve la possession de la boîte mail (§4.4).
           emailVerifiedAt: new Date(),
           acceptedTermsAt: new Date(),
-          acceptedTermsVersion: CURRENT_TERMS_VERSION,
+          acceptedTermsVersion: termsVersion,
         },
       });
     });

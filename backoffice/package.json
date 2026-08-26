@@ -1,0 +1,41 @@
+{
+  "name": "asb-backoffice",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vue-tsc -b && vite build",
+    "preview": "vite preview",
+    "lint": "eslint . --fix",
+    "format": "prettier --write src/",
+    "typecheck": "vue-tsc -b --noEmit",
+    "types:generate": "openapi-typescript http://localhost:3000/internal-docs-json -o src/types/api.ts"
+  },
+  "dependencies": {
+    "@primevue/themes": "^4.5.4",
+    "@vueuse/core": "^14.4.0",
+    "axios": "^1.19.0",
+    "chart.js": "^4.5.1",
+    "pinia": "^4.0.2",
+    "primeicons": "^8.0.0",
+    "primevue": "^4.5.5",
+    "vue": "^3.5.40",
+    "vue-router": "^5.2.0"
+  },
+  "devDependencies": {
+    "@types/node": "^24.13.3",
+    "@vitejs/plugin-vue": "^6.0.8",
+    "@vue/eslint-config-prettier": "^10.2.0",
+    "@vue/eslint-config-typescript": "^14.9.0",
+    "@vue/tsconfig": "^0.9.1",
+    "eslint": "^10.8.1",
+    "eslint-plugin-vue": "^10.10.0",
+    "jiti": "^2.7.0",
+    "openapi-typescript": "^7.13.0",
+    "prettier": "^3.9.6",
+    "typescript": "^5.9.3",
+    "vite": "^8.2.0",
+    "vue-tsc": "^3.3.9"
+  }
+}

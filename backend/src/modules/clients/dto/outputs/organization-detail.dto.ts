@@ -1,6 +1,7 @@
 import {
   AdminRefDto,
   BookingRequestRefDto,
+  ClientMissionRefDto,
   CountryRefDto,
 } from './reference.dto';
 
@@ -27,6 +28,9 @@ export class OrganizationDetailDto {
   assignedAdmin!: AdminRefDto | null;
   contacts!: OrganizationContactRefDto[];
   bookingRequests!: BookingRequestRefDto[];
+  // Gap comblé (module Clients, ligne 5.12) : aucune trace des missions
+  // n'existait auparavant sur la fiche organisation.
+  missions!: ClientMissionRefDto[];
   createdAt!: Date;
   updatedAt!: Date;
 }

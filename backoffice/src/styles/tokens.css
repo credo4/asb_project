@@ -1,0 +1,72 @@
+/*
+ * Tokens de marque ASB — couche 1 du thème (voir src/theme/asb-preset.ts pour
+ * la couche 2, qui consomme ces variables via PrimeVue).
+ *
+ * Copié VERBATIM depuis « Système de Design ASB.dc.html » (section 07 —
+ * Thème PrimeVue), fourni par le design. Ne pas modifier une valeur ici sans
+ * repasser par la charte source : les composants PrimeVue et le CSS custom
+ * ne référencent jamais une couleur/un espacement en dur, seulement ces
+ * tokens (ou les --p-* qu'ils alimentent).
+ */
+:root {
+  /* Marque */
+  --asb-gold-300: #E6C364;
+  --asb-gold-500: #CA8A04;
+  --asb-gold-700: #8A5D04;
+  --asb-gold-50:  #FBF3DE;
+  --asb-sand-300: #D0C5B2;
+  --asb-ink-900:  #0E0E0C;
+
+  /* Neutres clairs — back-office */
+  --asb-surface-page:     #FBF9F5;
+  --asb-surface-card:     #FFFFFF;
+  --asb-surface-hover:    #F7F4EE;
+  --asb-surface-sunken:   #F3F0E9;
+  --asb-surface-selected: #FBF3DE;
+  --asb-border:           #E5DFD3;
+  --asb-border-strong:    #CDC4B4;
+  --asb-text:             #0E0E0C;
+  --asb-text-muted:       #5F5A51;
+
+  /* Surfaces sombres — chrome + espace speaker */
+  --asb-dark-surface-0: #0E0E0C;
+  --asb-dark-surface-1: #151513;
+  --asb-dark-surface-2: #1E1E1B;
+  --asb-dark-surface-3: #2A2926;
+  --asb-dark-text:      #FFFFFF;
+  --asb-dark-text-muted:#D0C5B2;
+
+  /* Sémantiques */
+  --asb-info-600:    #1E5A8A;  --asb-info-50:    #EAF1F7;
+  --asb-success-600: #2E6B4E;  --asb-success-50: #EAF2ED;
+  --asb-warning-600: #A8620B;  --asb-warning-50: #FAF1E4;
+  --asb-danger-600:  #A32B22;  --asb-danger-50:  #FAEBE9;
+  --asb-neutral-600: #57534A;  --asb-neutral-50: #F3F0E9;
+
+  /* Typographie */
+  --asb-font-sans:    "Barlow", Helvetica, sans-serif;
+  --asb-font-display: "Playfair Display", Georgia, serif;
+  --asb-font-mono:    "JetBrains Mono", monospace;
+  --asb-text-label: 11px; --asb-text-sm: 13px;
+  --asb-text-base:  15px; --asb-text-lg: 17px;
+  --asb-text-xl:    20px; --asb-text-2xl: 24px;
+  --asb-text-display: 34px;
+  --asb-leading-tight: 1.25; --asb-leading-body: 1.6;
+
+  /* Espacement, formes, contrôles */
+  --asb-space-1: 4px;  --asb-space-2: 8px;
+  --asb-space-3: 12px; --asb-space-4: 16px;
+  --asb-space-6: 24px; --asb-space-8: 32px;
+  --asb-space-12: 48px; --asb-space-18: 72px;
+  --asb-radius-none: 0; --asb-radius-sm: 2px;
+  --asb-radius-md: 4px; --asb-radius-full: 999px;
+  --asb-shadow-1: 0 1px 2px rgba(14,14,12,.06);
+  --asb-shadow-2: 0 4px 12px rgba(14,14,12,.10);
+  --asb-shadow-3: 0 16px 40px rgba(14,14,12,.22);
+  --asb-control-h-sm: 32px; --asb-control-h: 40px;
+  --asb-control-h-lg: 48px;
+  --asb-row-h: 48px; --asb-row-h-compact: 36px;
+  --asb-focus-ring: 2px solid var(--asb-gold-500);
+  --asb-focus-offset: 2px;
+  --asb-duration: 120ms;
+}

@@ -21,6 +21,38 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
+// -----------------------------------------------------------------------
+// ⚠️ `prisma migrate diff --from-migrations ... --to-schema-datamodel
+// schema.prisma` (contre une shadow database) renvoie EN PERMANENCE deux
+// catégories de lignes qui n'indiquent AUCUNE dérive réelle — NE PAS
+// tenter de les "corriger" par une nouvelle migration, ça ne changera rien
+// (vérifié) :
+//   1. `MODIFY <col> JSON` sur toute colonne Json? (activity_logs.old_value/
+//      new_value, analytics_events.payload, booking_requests.metadata,
+//      speaker_revisions.payload, speakers.social_links, users.preferences) —
+//      le serveur cible est MariaDB (voir `SELECT VERSION()`), pas MySQL :
+//      MariaDB n'a pas de type JSON natif, `JSON` y est un ALIAS de
+//      `LONGTEXT` + `CHECK (json_valid(...))`. `information_schema` (et donc
+//      l'introspection de Prisma) rapporte cette colonne comme `longtext`
+//      même quand elle a bien été déclarée `JSON` dès l'origine (confirmé :
+//      la toute première migration, 20260728065740_init, déclare déjà
+//      `old_value JSON NULL`). Prisma propose donc indéfiniment de la
+//      "reconvertir" en JSON — un no-op, testé en direct (`ALTER TABLE ...
+//      MODIFY ... JSON` sur une colonne déjà ainsi déclarée ne change rien).
+//   2. `ALTER COLUMN speaker_media.updated_at DROP DEFAULT` — cette colonne
+//      porte `ON UPDATE CURRENT_TIMESTAMP`, et MariaDB refuse (silencieusement,
+//      sans erreur) de retirer le DEFAULT lié à une colonne CURRENT_TIMESTAMP
+//      avec clause ON UPDATE — testé en direct, la colonne ressort identique
+//      après exécution de cet ALTER.
+// Une véritable migration de rattrapage a été tentée (24/08/2026) puis
+// retirée après avoir prouvé, par rejeu complet de l'historique dans une
+// base neuve (`prisma migrate deploy` contre une base vide) + comparaison
+// `SHOW CREATE TABLE`, que le schéma rejoué est BIEN identique à la base
+// réelle pour ces colonnes — la dérive n'existe que dans l'outil de diff,
+// pas dans les données. Si ce projet migre un jour vers un vrai MySQL, ce
+// commentaire (et le bruit qu'il documente) devient obsolète.
+// -----------------------------------------------------------------------
+
 // =============================================================================
 // ENUMS
 // =============================================================================
@@ -165,6 +197,71 @@ enum AvailabilityResponseStatus {
   NEEDS_INFO
 }
 
+// Cycle de vie d'une mission (Phase 3, étape 3e — cf. cahier des charges
+// §8/§19). Séquence "idéalisée" du cahier des charges, mais volontairement
+// PAS une progression pas-à-pas stricte : voir
+// mission-status-transitions.util.ts — un ordre total (rang), pas une
+// matrice de paires écrite à la main comme BookingStatus/ApplicationStatus,
+// car la règle elle-même ("tout saut EN AVANT est permis") s'exprime
+// naturellement par une comparaison de rangs, pas par une énumération
+// exhaustive de paires autorisées. CANCELLED est atteignable depuis
+// n'importe quel statut non terminal (motif obligatoire) ; COMPLETED et
+// CANCELLED sont TERMINAUX (aucun "reopen" demandé à cette étape,
+// contrairement à BookingStatus/ApplicationStatus — pas construit par
+// anticipation, §10).
+enum MissionStatus {
+  PREPARATION
+  AVAILABILITY_CONFIRMED
+  QUOTE_SENT
+  QUOTE_ACCEPTED
+  CONTRACT_SENT
+  CONTRACT_SIGNED
+  DEPOSIT_EXPECTED
+  DEPOSIT_RECEIVED
+  LOGISTICS_IN_PROGRESS
+  CONFIRMED
+  DELIVERED
+  SPEAKER_PAYMENT_PENDING
+  COMPLETED
+  CANCELLED
+}
+
+// Trois sous-statuts EN ÉNUMÉRATIONS DISTINCTES du statut principal (§2) :
+// évoluent indépendamment — une mission peut être PENDING côté paiement et
+// READY côté logistique en même temps. Valeurs non détaillées dans le
+// prompt d'origine : ensembles minimaux mais suffisants pour représenter
+// "pas commencé / en cours / terminé" pour chacun des trois axes (hypothèse
+// raisonnable, comme le reste du projet quand une valeur exacte n'est pas
+// donnée).
+enum MissionContractStatus {
+  PENDING
+  SENT
+  SIGNED
+}
+
+enum MissionPaymentStatus {
+  PENDING
+  DEPOSIT_RECEIVED
+  FULLY_PAID
+}
+
+enum MissionLogisticsStatus {
+  PENDING
+  IN_PROGRESS
+  READY
+}
+
+// §7 — types de documents de mission.
+enum MissionDocumentType {
+  BRIEF
+  CONTRACT
+  SIGNED_CONTRACT
+  PRESENTATION
+  INVOICE
+  TRAVEL_INFO
+  OTHER
+}
+
 // Cycle de vie d'une candidature speaker (cf. §5, Phase 3 étape 3c).
 // Renommage Phase 3c : INTERVIEWED -> INTERVIEW_DONE (voir migration
 // add_roster_application_conversion — sûr sans backfill, cf. vérification
@@ -283,6 +380,13 @@ model User {
   acceptedTermsAt      DateTime? @map("accepted_terms_at")
   acceptedTermsVersion String?   @map("accepted_terms_version") @db.VarChar(60)
 
+  // Paramètres §28 — bucket générique, aucune forme imposée par le cahier
+  // des charges pour "préférences" (thème, densité de liste...) : plutôt
+  // qu'une colonne par préférence future (migration à chaque ajout), un
+  // Json? que PATCH /auth/me remplace tel quel. Jamais lu ailleurs dans le
+  // backend — pure restitution au front, comme socialLinks sur Speaker.
+  preferences Json?
+
   lastLoginAt DateTime? @map("last_login_at")
   createdAt   DateTime  @default(now()) @map("created_at")
   updatedAt   DateTime  @updatedAt @map("updated_at")
@@ -305,15 +409,91 @@ model User {
   createdReminders             Reminder[]                    @relation("ReminderCreator")
   addedBookingRequestSpeakers  BookingRequestSpeaker[]       @relation("BookingRequestSpeakerAddedBy")
   sentAvailabilityRequests     AvailabilityRequest[]         @relation("AvailabilityRequestSender")
+  createdMissions              Mission[]                     @relation("MissionCreatedBy")
+  acceptedMissions             Mission[]                     @relation("MissionAcceptedBy")
+  doneMissionChecklistItems    MissionChecklistItem[]        @relation("MissionChecklistDoneBy")
+  uploadedMissionDocuments     MissionDocument[]             @relation("MissionDocumentUploadedBy")
+  missionMessages              MissionMessage[]              @relation("MissionMessageAuthor")
   activityLogs                 ActivityLog[]
   emailVerificationTokens      EmailVerificationToken[]
   passwordResetTokens          PasswordResetToken[]
   invitationTokens             InvitationToken[]
   refreshTokens                RefreshToken[]
+  // Paramètres §28 — journal des connexions (A3) et paramètres généraux (A4).
+  loginEvents                  LoginEvent[]
+  updatedAppSettings           AppSettings[]                 @relation("AppSettingsUpdatedBy")
 
   @@index([role])
   @@index([status])
   @@map("users")
+}
+
+// Journal des connexions (§26, Paramètres > Sécurité). userId nullable :
+// une tentative avec un email inconnu ne correspond à AUCUN compte, mais
+// doit être journalisée quand même (c'est justement ce qui permet de
+// repérer un balayage d'emails). AUCUNE IP en clair — même principe de vie
+// privée que analytics_events (voir AnalyticsService#computeVisitorHash),
+// mais délibérément un sel FIXE plutôt que journalier : le but ici est
+// l'INVERSE de l'anonymisation d'analytics.events — on veut POUVOIR
+// corréler la même IP dans le temps pour repérer une attaque par force
+// brute étalée sur plusieurs jours, pas l'en empêcher. Voir
+// LoginEventsService pour le détail.
+//
+// Rétention : ce sont des données personnelles (email tenté, empreinte
+// d'appareil via userAgent, IP hachée mais retrouvable par force brute sur
+// un espace d'IP restreint) — elles ne doivent PAS s'accumuler
+// indéfiniment. Politique retenue : purge au-delà de 6 à 12 mois, MÊME
+// pattern que analytics_events (13 mois, voir CLAUDE.md §6) : pas encore
+// implémentée (pas de tâche planifiée de purge), à construire quand la
+// Phase 4/ops sera outillée pour ce type de tâche — ne pas la construire
+// par anticipation ici (§10).
+model LoginEvent {
+  id             Int      @id @default(autoincrement())
+  userId         Int?     @map("user_id")
+  emailAttempted String   @map("email_attempted") @db.VarChar(191)
+  success        Boolean
+  failureReason  String?  @map("failure_reason") @db.VarChar(120)
+  ipHash         String?  @map("ip_hash") @db.VarChar(64)
+  userAgent      String?  @map("user_agent") @db.VarChar(500)
+  createdAt      DateTime @default(now()) @map("created_at")
+
+  user User? @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([userId])
+  @@index([success])
+  @@index([createdAt])
+  @@index([emailAttempted])
+  @@map("login_events")
+}
+
+// Paramètres généraux (§26/§28, Paramètres > Général) — ligne UNIQUE
+// (singleton), pas une table clé/valeur générique à `value: Json` : chaque
+// paramètre a sa PROPRE colonne typée (c'est ce que "TYPÉE (pas un JSON
+// libre)" veut dire ici), donc validable et lisible directement en SQL,
+// jamais une chaîne à parser. Toutes les colonnes sont nullable : NULL =
+// "pas encore configuré", AppSettingsService#getSettings() applique alors
+// la valeur de repli existante (ancien codé en dur / .env) — jamais une
+// valeur bidon écrite en base au premier démarrage.
+model AppSettings {
+  id Int @id @default(autoincrement())
+
+  agencyName                String? @map("agency_name") @db.VarChar(200)
+  teamEmail                 String? @map("team_email") @db.VarChar(191)
+  // §A4 — n'intervient PAS dans le calcul du SLA des 5 types de service
+  // existants (RESPONSE_SLA_BUSINESS_DAYS reste la source, décision
+  // produit explicite) : sert uniquement de repli pour un futur type de
+  // service qui n'aurait pas encore d'entrée dédiée dans cette table.
+  responseSlaBusinessDays   Int?    @map("response_sla_business_days")
+  defaultCurrency           String? @map("default_currency") @db.VarChar(3)
+  collaborationTermsVersion String? @map("collaboration_terms_version") @db.VarChar(60)
+
+  updatedById Int?     @map("updated_by_id")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  updatedBy User? @relation("AppSettingsUpdatedBy", fields: [updatedById], references: [id], onDelete: SetNull)
+
+  @@map("app_settings")
 }
 
 // Un token émis = une ligne. Permet une vraie rotation : on marque l'ancien
@@ -445,6 +625,7 @@ model Country {
   organizations             Organization[]
   contacts                  Contact[]
   availabilityRequests      AvailabilityRequest[]
+  missions                  Mission[]
 
   @@map("countries")
 }
@@ -543,6 +724,8 @@ model Speaker {
   // Matching & disponibilité (Phase 3d) — voir CLAUDE.md.
   bookingRequestCandidacies BookingRequestSpeaker[]     @relation("BookingRequestSpeakerCandidate")
   availabilityRequests      AvailabilityRequest[]       @relation("SpeakerAvailabilityRequests")
+  // Missions (Phase 3e) — voir CLAUDE.md.
+  missions                  Mission[]
 
   @@index([status])
   @@index([isTopRequested])
@@ -844,6 +1027,7 @@ model Organization {
   assignedAdmin   User?            @relation("OrganizationAssignee", fields: [assignedAdminId], references: [id], onDelete: SetNull)
   contacts        Contact[]
   bookingRequests BookingRequest[] @relation("BookingOrganization")
+  missions        Mission[]
 
   @@index([countryId])
   @@index([assignedAdminId])
@@ -876,6 +1060,7 @@ model Contact {
   organization    Organization?    @relation(fields: [organizationId], references: [id], onDelete: SetNull)
   country         Country?         @relation(fields: [countryId], references: [id], onDelete: SetNull)
   bookingRequests BookingRequest[] @relation("BookingContact")
+  missions        Mission[]
 
   @@index([organizationId])
   @@index([countryId])
@@ -974,6 +1159,8 @@ model BookingRequest {
   // Matching & disponibilité (Phase 3d) — voir CLAUDE.md.
   speakerCandidates    BookingRequestSpeaker[]
   availabilityRequests AvailabilityRequest[]
+  // Missions (Phase 3e) — voir CLAUDE.md.
+  missions             Mission[]
 
   @@index([serviceType])
   @@index([status])
@@ -982,6 +1169,10 @@ model BookingRequest {
   @@index([priority])
   @@index([assignedAdminId])
   @@index([createdAt])
+  // Rapports (§14, ligne 5.13) — série temporelle + ventilation par statut/
+  // type de service sur une période, le filtre le plus courant du rapport
+  // commercial (ReportsService).
+  @@index([createdAt, status, serviceType])
   @@map("booking_requests")
 }
 
@@ -1431,6 +1622,12 @@ model AnalyticsEvent {
   @@index([speakerId])
   @@index([curatedListId])
   @@index([createdAt])
+  // Rapports (§14, ligne 5.13) — (type, createdAt) sert les agrégations par
+  // type d'événement sur une période (éditorial) ; (speakerId, type,
+  // createdAt) sert le dédoublonnage de vues par speaker (fenêtre de 30
+  // minutes, voir ReportsService) sans scanner toute la table.
+  @@index([type, createdAt])
+  @@index([speakerId, type, createdAt])
   @@map("analytics_events")
 }
 
@@ -1552,4 +1749,186 @@ model AvailabilityRequest {
   @@index([status])
   @@index([respondDueAt])
   @@map("availability_requests")
+}
+
+// =============================================================================
+// MISSIONS (Phase 3, étape 3e — cf. cahier des charges §8/§19)
+// -----------------------------------------------------------------------------
+// Dernière étape de la Phase 3. AUCUN module financier ici (facturation,
+// paiements en ligne — §21/§31 les rangent en v2) : on stocke montants et
+// statuts, on ne facture rien.
+// =============================================================================
+
+// Une mission = l'engagement concret d'UN speaker sur UNE demande client,
+// créé par une action EXPLICITE de l'admin (POST .../missions), JAMAIS un
+// effet de bord automatique d'un changement de statut de la demande (voir
+// BookingRequestsService#onConfirmed, désormais documenté comme
+// délibérément non câblé).
+model Mission {
+  id        Int    @id @default(autoincrement())
+  reference String @unique @db.VarChar(30) // MSN-YYYY-NNNNNN, même générateur partagé que ASB-/APP-
+
+  bookingRequestId Int  @map("booking_request_id")
+  speakerId        Int  @map("speaker_id")
+  // Copiés depuis booking_requests.contactId/organizationId au moment de la
+  // création (si renseignés) — pratique pour lister/filtrer les missions
+  // par organisation sans remonter systématiquement par la demande, jamais
+  // devinés au-delà de cette copie directe.
+  organizationId   Int? @map("organization_id")
+  contactId        Int? @map("contact_id")
+
+  serviceType ServiceType @map("service_type")
+
+  eventDate          DateTime @map("event_date")
+  startTime          String?  @map("start_time") @db.VarChar(10) // "14:00", interprété dans `timezone`
+  endTime            String?  @map("end_time") @db.VarChar(10)
+  timezone           String?  @db.VarChar(60)
+  locationCountryId  Int?     @map("location_country_id")
+  address            String?  @db.Text
+  isVirtual          Boolean  @default(false) @map("is_virtual")
+  virtualLink        String?  @map("virtual_link") @db.VarChar(500)
+  onSiteContactName  String?  @map("on_site_contact_name") @db.VarChar(200)
+  onSiteContactPhone String?  @map("on_site_contact_phone") @db.VarChar(50)
+  durationMinutes    Int?     @map("duration_minutes")
+  topic              String   @db.Text
+  language           String?  @db.VarChar(80)
+  format             String?  @db.VarChar(120)
+  participantCount   Int?     @map("participant_count")
+
+  // --- Frontière financière (§5) — voir MissionSpeakerDto : le speaker ne
+  // voit JAMAIS clientAmount ni agencyCommission. ---
+  clientAmount     Decimal? @map("client_amount") @db.Decimal(12, 2)
+  speakerAmount    Decimal? @map("speaker_amount") @db.Decimal(12, 2)
+  agencyCommission Decimal? @map("agency_commission") @db.Decimal(12, 2)
+  expenses         Decimal? @db.Decimal(12, 2)
+  currency         String   @default("USD") @db.VarChar(3)
+
+  status          MissionStatus          @default(PREPARATION)
+  contractStatus  MissionContractStatus  @default(PENDING) @map("contract_status")
+  paymentStatus   MissionPaymentStatus   @default(PENDING) @map("payment_status")
+  logisticsStatus MissionLogisticsStatus @default(PENDING) @map("logistics_status")
+
+  // Notes ADMIN uniquement (§5 — le speaker ne les voit jamais). Champ
+  // texte unique volontairement ici (pas le pattern "ajout seul" de
+  // booking_request_notes) : une seule ligne de mission, un seul admin
+  // responsable à la fois en pratique — pas la même dynamique concurrente
+  // qu'un dossier client partagé par toute l'équipe.
+  internalNotes      String? @map("internal_notes") @db.Text
+  // Obligatoire (validé en code, pas en base) quand status = CANCELLED.
+  cancellationReason String? @map("cancellation_reason") @db.Text
+
+  // §6 — l'acceptation DÉFINITIVE du speaker, distincte de la réponse de
+  // disponibilité de la 3d (AvailabilityRequest.responseStatus).
+  acceptedAt          DateTime? @map("accepted_at")
+  acceptedById        Int?      @map("accepted_by_id")
+  briefAcknowledgedAt DateTime? @map("brief_acknowledged_at")
+
+  // §1 — une seule mission ACTIVE par couple (bookingRequestId, speakerId).
+  // Même pattern que SpeakerRevision.activeGuard (Phase 2a) et
+  // AvailabilityRequest.activeGuard (Phase 3d) : encode le COUPLE en
+  // chaîne, NULL dès que le statut devient terminal (COMPLETED ou
+  // CANCELLED), index UNIQUE, catch du P2002 traduit en 409 — jamais un
+  // findFirst suivi d'un create.
+  activeGuard String? @unique @map("active_guard") @db.VarChar(40)
+
+  createdById Int?      @map("created_by_id")
+  createdAt   DateTime  @default(now()) @map("created_at")
+  updatedAt   DateTime  @updatedAt @map("updated_at")
+  deletedAt   DateTime? @map("deleted_at")
+
+  bookingRequest  BookingRequest @relation(fields: [bookingRequestId], references: [id], onDelete: Cascade)
+  speaker         Speaker        @relation(fields: [speakerId], references: [id], onDelete: Cascade)
+  organization    Organization?  @relation(fields: [organizationId], references: [id], onDelete: SetNull)
+  contact         Contact?       @relation(fields: [contactId], references: [id], onDelete: SetNull)
+  locationCountry Country?       @relation(fields: [locationCountryId], references: [id], onDelete: SetNull)
+  createdBy       User?          @relation("MissionCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  acceptedBy      User?          @relation("MissionAcceptedBy", fields: [acceptedById], references: [id], onDelete: SetNull)
+
+  checklistItems MissionChecklistItem[]
+  documents      MissionDocument[]
+  messages       MissionMessage[]
+
+  @@index([bookingRequestId])
+  @@index([speakerId])
+  @@index([organizationId])
+  @@index([status])
+  @@index([eventDate])
+  // Rapports (§14, ligne 5.13) — chiffre d'affaires réalisé/prévisionnel
+  // filtré par statut sur la fenêtre d'événement (ReportsService).
+  @@index([eventDate, status])
+  @@map("missions")
+}
+
+// §4 — les 15 points du §8.3 sont instanciés en LIGNES à la création de la
+// mission (voir mission-checklist.constants.ts), pas des booléens sur
+// Mission : extensible (l'admin peut ajouter un point propre à une
+// mission), auditable (doneById/doneAt par ligne), et le pourcentage
+// d'avancement est CALCULÉ à la lecture, jamais stocké — même principe que
+// isOverdue (BookingRequest) et le score agrégé (RosterApplicationEvaluation).
+model MissionChecklistItem {
+  id           Int       @id @default(autoincrement())
+  missionId    Int       @map("mission_id")
+  code         String    @db.VarChar(80)
+  label        String    @db.VarChar(250)
+  displayOrder Int       @default(0) @map("display_order")
+  isDone       Boolean   @default(false) @map("is_done")
+  doneById     Int?      @map("done_by_id")
+  doneAt       DateTime? @map("done_at")
+  notes        String?   @db.Text
+
+  mission Mission @relation(fields: [missionId], references: [id], onDelete: Cascade)
+  doneBy  User?   @relation("MissionChecklistDoneBy", fields: [doneById], references: [id], onDelete: SetNull)
+
+  @@index([missionId])
+  @@map("mission_checklist_items")
+}
+
+// §7 — RÉUTILISE intégralement la brique de stockage privé de la Phase 2c
+// (StorageService.savePrivate, validation par magic bytes via
+// FileValidationService, liens signés HMAC, revalidation en base avant
+// streaming) — même pattern que booking_request_attachments (Phase 3b).
+// isSharedWithSpeaker : contrôle d'accès au niveau DONNÉE (filtré dans la
+// requête Prisma côté speaker, jamais en JS après coup — même philosophie
+// que curated_lists, §5) ; un speaker voit aussi, INDÉPENDAMMENT de ce
+// drapeau, les documents qu'il a lui-même déposés (voir
+// MissionDocumentsService#listForSpeaker).
+model MissionDocument {
+  id                  Int                 @id @default(autoincrement())
+  missionId           Int                 @map("mission_id")
+  type                MissionDocumentType
+  uploadedById        Int?                @map("uploaded_by_id")
+  uploadedByRole      Role                @map("uploaded_by_role")
+  isSharedWithSpeaker Boolean             @default(false) @map("is_shared_with_speaker")
+  storageKey          String              @map("storage_key") @db.VarChar(500)
+  originalFilename    String              @map("original_filename") @db.VarChar(255)
+  mimeType            String              @map("mime_type") @db.VarChar(150)
+  sizeBytes           Int                 @map("size_bytes")
+  createdAt           DateTime            @default(now()) @map("created_at")
+  deletedAt           DateTime?           @map("deleted_at")
+
+  mission    Mission @relation(fields: [missionId], references: [id], onDelete: Cascade)
+  uploadedBy User?   @relation("MissionDocumentUploadedBy", fields: [uploadedById], references: [id], onDelete: SetNull)
+
+  @@index([missionId])
+  @@map("mission_documents")
+}
+
+// §6 — fil de discussion en AJOUT SEUL (même pattern que
+// booking_request_notes, Phase 3b) : visible de l'admin et du SEUL speaker
+// concerné, jamais des autres speakers ni du client. Volontairement
+// minimal (pas d'édition, pas de pièce jointe, pas de lecture/non-lu) — la
+// messagerie complète est Phase 4.
+model MissionMessage {
+  id         Int      @id @default(autoincrement())
+  missionId  Int      @map("mission_id")
+  authorId   Int?     @map("author_id")
+  authorRole Role     @map("author_role")
+  body       String   @db.Text
+  createdAt  DateTime @default(now()) @map("created_at")
+
+  mission Mission @relation(fields: [missionId], references: [id], onDelete: Cascade)
+  author  User?   @relation("MissionMessageAuthor", fields: [authorId], references: [id], onDelete: SetNull)
+
+  @@index([missionId])
+  @@map("mission_messages")
 }

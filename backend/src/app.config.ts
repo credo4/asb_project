@@ -29,6 +29,30 @@ export function buildPublicApiDocument(app: INestApplication): OpenAPIObject {
   });
 }
 
+// Doc OpenAPI INTERNE, distincte de buildPublicApiDocument() ci-dessus : le
+// back-office (dépôt séparé, développé par l'équipe ASB) a besoin des types
+// des routes /admin/*, /auth/* et /speaker/* pour son codegen
+// (openapi-typescript), mais /docs reste scopé au SEUL PublicModule — c'est
+// le contrat documenté avec le développeur du site public, on ne veut pas y
+// mélanger la forme des routes internes (voir commentaire sur
+// SwaggerModule.setup('docs', ...) plus bas). Document COMPLET (aucun
+// `include`), monté sur un chemin séparé et JAMAIS en production (voir
+// configureApp) : personne d'anonyme sur le site public n'a de raison de
+// tomber dessus, et la restriction NODE_ENV empêche qu'il finisse par
+// accident derrière une URL publique en prod.
+function buildInternalApiDocument(app: INestApplication): OpenAPIObject {
+  const swaggerConfig = new DocumentBuilder()
+    .setTitle('Africa Speakers Bureau — API interne')
+    .setDescription(
+      'Ensemble des routes (admin/auth/speaker/public) — pour le codegen du back-office. Jamais monté en production.',
+    )
+    .setVersion('1.0')
+    .addServer(process.env.APP_URL ?? 'http://localhost:3000')
+    .addBearerAuth()
+    .build();
+  return SwaggerModule.createDocument(app, swaggerConfig);
+}
+
 // Config d'app partagée entre main.ts (bootstrap réel) et les tests e2e —
 // pour que les tests s'exécutent dans les mêmes conditions que la prod
 // (mêmes pipes/filtres/CORS/doc Swagger) sans dupliquer cette logique et
@@ -135,4 +159,10 @@ export function configureApp(app: INestApplication): void {
   // développeur du site public, pas une doc interne des routes admin — on
   // ne veut pas lui exposer la forme des endpoints /admin/* ou /auth/*.
   SwaggerModule.setup('docs', app, buildPublicApiDocument(app));
+
+  // Doc interne (admin/auth/speaker), chemin séparé, hors production —
+  // voir buildInternalApiDocument() ci-dessus pour le raisonnement complet.
+  if (process.env.NODE_ENV !== 'production') {
+    SwaggerModule.setup('internal-docs', app, buildInternalApiDocument(app));
+  }
 }

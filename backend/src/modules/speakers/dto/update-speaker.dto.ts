@@ -1,4 +1,9 @@
-import { PartialType } from '@nestjs/mapped-types';
+// `@nestjs/swagger` réexporte le même PartialType que `@nestjs/mapped-types`
+// (même comportement de validation) MAIS propage aussi les métadonnées
+// Swagger héritées de CreateSpeakerDto -- `@nestjs/mapped-types` ne le fait
+// pas, ce qui faisait ressortir ce DTO totalement vide dans le schéma
+// OpenAPI généré pour le back-office (voir CLAUDE.md, plugin CLI swagger).
+import { PartialType } from '@nestjs/swagger';
 import { CreateSpeakerDto } from './create-speaker.dto';
 
 // Tous les champs deviennent optionnels. Sémantique PATCH : un champ absent

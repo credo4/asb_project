@@ -25,6 +25,19 @@ function toCountryRef(
   return { id: country.id, name: country.name, iso2: country.iso2 };
 }
 
+// "Dernière activité" (§1 du prompt Clients) : la plus récente des trois
+// dates disponibles — jamais stockée, recalculée à chaque lecture, même
+// principe que checklistProgressPercent (module Missions).
+function toLastActivityAt(row: OrganizationListRow): Date | null {
+  const candidates = [
+    row.updatedAt,
+    row.bookingRequests[0]?.createdAt,
+    row.missions[0]?.createdAt,
+  ].filter((d): d is Date => d instanceof Date);
+  if (candidates.length === 0) return null;
+  return candidates.reduce((latest, d) => (d > latest ? d : latest));
+}
+
 export function toListItemDto(
   row: OrganizationListRow,
 ): OrganizationListItemDto {
@@ -35,6 +48,9 @@ export function toListItemDto(
     country: toCountryRef(row.country),
     website: row.website,
     assignedAdmin: toAdminRef(row.assignedAdmin),
+    bookingRequestsCount: row._count.bookingRequests,
+    missionsCount: row._count.missions,
+    lastActivityAt: toLastActivityAt(row),
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
   };
@@ -57,6 +73,18 @@ export function toDetailDto(row: OrganizationDetailRow): OrganizationDetailDto {
       jobTitle: c.jobTitle,
     })),
     bookingRequests: row.bookingRequests,
+    missions: row.missions.map((m) => ({
+      id: m.id,
+      reference: m.reference,
+      status: m.status,
+      eventDate: m.eventDate,
+      speaker: {
+        id: m.speaker.id,
+        displayName:
+          m.speaker.publicName ??
+          `${m.speaker.firstName} ${m.speaker.lastName}`,
+      },
+    })),
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
   };

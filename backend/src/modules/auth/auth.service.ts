@@ -7,10 +7,14 @@ import { User } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
 import { MailService } from '../../mail/mail.service';
 import { UsersService } from '../users/users.service';
+import { LoginEventsService } from '../login-events/login-events.service';
 import { LoginDto } from './dto/login.dto';
+import { ChangePasswordDto } from '../users/dto/change-password.dto';
 import { VerifyEmailDto } from './dto/verify-email.dto';
 import { ForgotPasswordDto } from './dto/forgot-password.dto';
 import { ResetPasswordDto } from './dto/reset-password.dto';
+import { MeResponseDto } from './dto/outputs/me.dto';
+import { toMeResponseDto } from './mappers/auth.mapper';
 
 export interface TokenPair {
   accessToken: string;
@@ -38,28 +42,86 @@ export class AuthService {
     private readonly jwtService: JwtService,
     private readonly config: ConfigService,
     private readonly mailService: MailService,
+    private readonly loginEvents: LoginEventsService,
   ) {}
 
-  async login(dto: LoginDto): Promise<TokenPair> {
+  // §A3 — journalise CHAQUE tentative, réussie ou non (voir LoginEventsService
+  // pour le détail du hachage d'IP) : "c'est ce qui permet de repérer une
+  // attaque par force brute" (échecs ET réussites, l'un sans l'autre ne
+  // suffit pas à distinguer un balayage réussi d'un balayage qui échoue
+  // encore). `ip`/`userAgent` viennent du contrôleur (voir AuthController) ;
+  // la journalisation elle-même est fire-and-forget (voir
+  // LoginEventsService#record) — un échec ne doit jamais faire échouer,
+  // ni même ralentir sensiblement, le login lui-même.
+  async login(
+    dto: LoginDto,
+    context: { ip: string; userAgent?: string },
+  ): Promise<TokenPair> {
     const user = await this.usersService.findByEmail(dto.email);
 
     // Même message que le mot de passe soit faux ou l'utilisateur inexistant
     // (ne jamais révéler quel élément a échoué — anti-enumeration).
     if (!user || !user.passwordHash) {
+      void this.loginEvents.record({
+        userId: user?.id ?? null,
+        emailAttempted: dto.email,
+        success: false,
+        failureReason: user ? 'NO_PASSWORD_SET' : 'UNKNOWN_EMAIL',
+        ip: context.ip,
+        userAgent: context.userAgent,
+      });
       throw new UnauthorizedException('Identifiants invalides');
     }
 
     const passwordValid = await bcrypt.compare(dto.password, user.passwordHash);
     if (!passwordValid) {
+      void this.loginEvents.record({
+        userId: user.id,
+        emailAttempted: dto.email,
+        success: false,
+        failureReason: 'WRONG_PASSWORD',
+        ip: context.ip,
+        userAgent: context.userAgent,
+      });
       throw new UnauthorizedException('Identifiants invalides');
     }
 
     if (user.status !== 'ACTIVE') {
+      void this.loginEvents.record({
+        userId: user.id,
+        emailAttempted: dto.email,
+        success: false,
+        failureReason: `ACCOUNT_${user.status}`,
+        ip: context.ip,
+        userAgent: context.userAgent,
+      });
       throw new UnauthorizedException('Compte inactif');
     }
 
+    void this.loginEvents.record({
+      userId: user.id,
+      emailAttempted: dto.email,
+      success: true,
+      ip: context.ip,
+      userAgent: context.userAgent,
+    });
     await this.usersService.touchLastLogin(user.id);
     return this.issueTokenPair(user);
+  }
+
+  // GET /auth/me — le login (ci-dessus) ne renvoie que la paire de tokens,
+  // jamais un objet utilisateur : le back-office a besoin d'un endroit pour
+  // récupérer nom/rôle après connexion (menu utilisateur) sans décoder le
+  // JWT côté client. `userId` vient de request.user (JwtAccessStrategy a
+  // déjà revalidé le compte ACTIVE au moment de vérifier le token) ; le
+  // re-lookup ici sert seulement à récupérer firstName/lastName, absents du
+  // payload du JWT.
+  async me(userId: number): Promise<MeResponseDto> {
+    const user = await this.usersService.findById(userId);
+    if (!user) {
+      throw new UnauthorizedException('Compte introuvable');
+    }
+    return toMeResponseDto(user);
   }
 
   async refreshTokens(refreshToken: string): Promise<TokenPair> {
@@ -229,6 +291,51 @@ export class AuthService {
     ]);
 
     return { message: 'Mot de passe réinitialisé avec succès.' };
+  }
+
+  // §A2 — POST /auth/me/change-password. Exige le mot de passe ACTUEL
+  // (jamais suffisant de tenir un access token valide). "Invalide les
+  // autres sessions" (§A2) : révoque TOUS les refresh tokens (même
+  // mécanisme que resetPassword ci-dessus) puis réémet immédiatement une
+  // paire fraîche pour LA session courante — impossible de savoir, côté
+  // serveur, quel refresh token appartient à "cette" session (seul
+  // l'access token, sans lien stable vers un refresh token précis,
+  // transite sur cette requête) ; réémettre tout de suite reproduit
+  // l'effet recherché ("les autres sessions meurent, celle-ci continue
+  // sans interruption") sans avoir à faire porter un identifiant de
+  // session supplémentaire de bout en bout.
+  async changePassword(
+    userId: number,
+    dto: ChangePasswordDto,
+  ): Promise<TokenPair> {
+    const user = await this.usersService.findById(userId);
+    if (!user || !user.passwordHash) {
+      throw new UnauthorizedException('Compte introuvable');
+    }
+
+    const currentValid = await bcrypt.compare(
+      dto.currentPassword,
+      user.passwordHash,
+    );
+    if (!currentValid) {
+      throw new UnauthorizedException('Mot de passe actuel incorrect');
+    }
+
+    const passwordHash = await bcrypt.hash(dto.newPassword, BCRYPT_COST_FACTOR);
+
+    const updated = await this.prisma.$transaction(async (tx) => {
+      const row = await tx.user.update({
+        where: { id: userId },
+        data: { passwordHash },
+      });
+      await tx.refreshToken.updateMany({
+        where: { userId, revokedAt: null },
+        data: { revokedAt: new Date() },
+      });
+      return row;
+    });
+
+    return this.issueTokenPair(updated);
   }
 
   // Enveloppe publique de issueTokenPair — réutilisée par

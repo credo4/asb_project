@@ -1,0 +1,18 @@
+/*
+ * Styles de base globaux -- distinct de tokens.css (qui ne contient QUE des
+ * tokens copiés verbatim de la charte, jamais de règle). Une seule règle ici
+ * pour l'instant : le focus clavier visible.
+ *
+ * Revue avant démo (point 6) : les composants PrimeVue héritent déjà de
+ * --asb-focus-ring via le preset (src/theme/asb-preset.ts), mais aucun
+ * anneau de focus n'était défini pour les éléments HTML "nus" de l'app
+ * (liens de nav, lignes cliquables des fiches organisation/contact/mission,
+ * boutons de réordonnancement...) -- ils retombaient sur l'anneau par
+ * défaut du navigateur, peu visible sur le chrome sombre de la barre
+ * latérale. `:focus-visible` (pas `:focus`) pour ne montrer l'anneau qu'à
+ * la navigation clavier, jamais au clic souris.
+ */
+:focus-visible {
+  outline: var(--asb-focus-ring);
+  outline-offset: var(--asb-focus-offset);
+}

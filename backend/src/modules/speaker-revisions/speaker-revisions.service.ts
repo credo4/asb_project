@@ -10,6 +10,7 @@ import { Prisma, RevisionStatus, SpeakerStatus } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
 import { ActivityLogService } from '../../activity-log/activity-log.service';
 import { MailService } from '../../mail/mail.service';
+import { AppSettingsService } from '../app-settings/app-settings.service';
 import { AuthenticatedUser } from '../../common/types/authenticated-user.interface';
 import {
   SPEAKER_DETAIL_INCLUDE,
@@ -72,6 +73,7 @@ export class SpeakerRevisionsService {
     private readonly config: ConfigService,
     private readonly diffService: SpeakerRevisionDiffService,
     private readonly previewService: SpeakerRevisionPreviewService,
+    private readonly appSettings: AppSettingsService,
   ) {}
 
   // ---------------------------------------------------------------------
@@ -789,11 +791,11 @@ export class SpeakerRevisionsService {
     revision: SpeakerRevisionRow,
     speaker: SpeakerDetailRow,
   ): Promise<void> {
-    const teamEmail = this.config.get<string>('ASB_TEAM_EMAIL');
+    const teamEmail = (await this.appSettings.getEffectiveSettings()).teamEmail;
     const frontendUrl = this.config.get<string>('FRONTEND_URL');
     if (!teamEmail) {
       this.logger.warn(
-        'ASB_TEAM_EMAIL absent : notification interne non envoyée.',
+        "Email d'équipe absent (ni app_settings.teamEmail, ni ASB_TEAM_EMAIL) : notification interne non envoyée.",
       );
       return;
     }

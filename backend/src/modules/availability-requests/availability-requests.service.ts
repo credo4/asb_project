@@ -209,6 +209,24 @@ export class AvailabilityRequestsService {
     return toAdminDto(row);
   }
 
+  // GET /admin/availability-requests?bookingRequestId=X -- lecture seule
+  // (voir ListAvailabilityRequestsDto). Toutes les sollicitations envoyées
+  // pour cette demande, tous speakers confondus : le bloc "Speakers
+  // proposés" du back-office les recroise par speakerId côté client.
+  // Triées par date d'envoi décroissante -- s'il y en a plusieurs pour un
+  // même speaker (une ancienne EXPIRED/CANCELLED, une nouvelle SENT), la
+  // plus récente arrive en premier.
+  async findForBookingRequest(
+    bookingRequestId: number,
+  ): Promise<AvailabilityRequestAdminDto[]> {
+    const rows = await this.prisma.availabilityRequest.findMany({
+      where: { bookingRequestId },
+      orderBy: { sentAt: 'desc' },
+      select: AVAILABILITY_REQUEST_SELECT,
+    });
+    return rows.map(toAdminDto);
+  }
+
   // ---------------------------------------------------------------------
   // SPEAKER — ses opportunités (§4). Scoping EXCLUSIVEMENT via
   // resolveOwnSpeakerId (Speaker.userId = actor.id) — jamais un id fourni

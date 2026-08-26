@@ -4,6 +4,7 @@ import { JwtModule } from '@nestjs/jwt';
 import { PassportModule } from '@nestjs/passport';
 import { MailModule } from '../../mail/mail.module';
 import { UsersModule } from '../users/users.module';
+import { LoginEventsModule } from '../login-events/login-events.module';
 import { AuthController } from './auth.controller';
 import { AuthService } from './auth.service';
 import { JwtAccessStrategy } from './strategies/jwt-access.strategy';
@@ -11,6 +12,7 @@ import { JwtAccessStrategy } from './strategies/jwt-access.strategy';
 @Module({
   imports: [
     UsersModule,
+    LoginEventsModule,
     MailModule,
     PassportModule,
     // Config par défaut = access token. Le refresh token utilise un secret et

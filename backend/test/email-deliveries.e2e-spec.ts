@@ -3,7 +3,13 @@ import { INestApplication } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import request from 'supertest';
 import { App } from 'supertest/types';
-import { ApplicationStatus, Role, ServiceType, User } from '@prisma/client';
+import {
+  ApplicationStatus,
+  BookingStatus,
+  Role,
+  ServiceType,
+  User,
+} from '@prisma/client';
 import { AppModule } from '../src/app.module';
 import { PrismaService } from '../src/prisma/prisma.service';
 import { configureApp } from '../src/app.config';
@@ -44,6 +50,7 @@ describe('Journal des emails — email_deliveries (e2e)', () => {
   const createdBookingReferences: string[] = [];
   const createdApplicationIds: number[] = [];
   const createdSpeakerIds: number[] = [];
+  const createdOrganizationIds: number[] = [];
 
   let adminToken: string;
   let speakerToken: string;
@@ -105,6 +112,9 @@ describe('Journal des emails — email_deliveries (e2e)', () => {
       where: { id: { in: createdSpeakerIds } },
     });
     await prisma.user.deleteMany({ where: { id: { in: createdUserIds } } });
+    await prisma.organization.deleteMany({
+      where: { id: { in: createdOrganizationIds } },
+    });
     await app.close();
   });
 
@@ -348,6 +358,78 @@ describe('Journal des emails — email_deliveries (e2e)', () => {
           where: {
             relatedEntityType: 'AvailabilityRequest',
             relatedEntityId: availabilityRequestId,
+          },
+        });
+        expect(rows.length).toBeGreaterThan(0);
+        expect(rows.every((r) => r.status === 'FAILED')).toBe(true);
+        expect(rows.every((r) => r.errorMessage)).toBeTruthy();
+      },
+      15000,
+    );
+
+    it(
+      'création de mission (Phase 3e, §1/§9) : réussit (201) même si ' +
+        "l'envoi RÉEL de notification au speaker échoue, journalisé FAILED " +
+        "sous relatedEntityType = 'Mission'",
+      async () => {
+        const speakerUser = await prisma.user.create({
+          data: {
+            email: `e2e-emaildelivery-missionspeaker-${suffix}@example.com`,
+            role: Role.SPEAKER,
+            status: 'ACTIVE',
+          },
+        });
+        createdUserIds.push(speakerUser.id);
+        const speaker = await prisma.speaker.create({
+          data: {
+            userId: speakerUser.id,
+            firstName: 'Mission',
+            lastName: 'Speaker',
+            slug: `e2e-emaildelivery-missionspeaker-${suffix}`,
+            status: 'PUBLISHED',
+            isVisible: true,
+            publishedAt: new Date(),
+          },
+        });
+        createdSpeakerIds.push(speaker.id);
+
+        const organization = await prisma.organization.create({
+          data: { name: `[E2E] Email Delivery Mission Org ${suffix}` },
+        });
+        createdOrganizationIds.push(organization.id);
+
+        const bookingRequest = await prisma.bookingRequest.create({
+          data: {
+            reference: `ASB-EMAILDELIV-MSN-${suffix}`,
+            serviceType: ServiceType.CONFERENCE,
+            fullName: '[E2E] Email Delivery Mission Client',
+            organization: '[E2E] Email Delivery Mission Client Org',
+            workEmail: `e2e-emaildelivery-missionclient-${suffix}@example.com`,
+            eventDate: new Date('2027-10-01T00:00:00.000Z'),
+            primaryTopics: 'Digital transformation',
+            organizationId: organization.id,
+            status: BookingStatus.CONFIRMED,
+          },
+        });
+        createdBookingReferences.push(bookingRequest.reference);
+
+        await request(app.getHttpServer())
+          .post(`/admin/booking-requests/${bookingRequest.id}/speakers`)
+          .set('Authorization', `Bearer ${adminToken}`)
+          .send({ speakerId: speaker.id })
+          .expect(201);
+
+        const res = await request(app.getHttpServer())
+          .post(`/admin/booking-requests/${bookingRequest.id}/missions`)
+          .set('Authorization', `Bearer ${adminToken}`)
+          .send({ speakerId: speaker.id })
+          .expect(201);
+        const missionId = (res.body as { id: number }).id;
+
+        const rows = await prisma.emailDelivery.findMany({
+          where: {
+            relatedEntityType: 'Mission',
+            relatedEntityId: missionId,
           },
         });
         expect(rows.length).toBeGreaterThan(0);
