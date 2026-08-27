@@ -1,1 +1,0 @@
-var e=`/assets/asb-logo-or-C_ihR_-D.png`;export{e as t};

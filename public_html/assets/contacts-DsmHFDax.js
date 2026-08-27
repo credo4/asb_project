@@ -1,1 +1,0 @@
-import{r as e}from"./index-DdqaRqa9.js";async function t(t){let{data:n}=await e.get(`/admin/contacts/${t}`);return n}async function n(t){if(t.trim().length<2)return[];let{data:n}=await e.get(`/admin/contacts`,{params:{page:1,perPage:10,search:t}});return n.data}export{n,t};
